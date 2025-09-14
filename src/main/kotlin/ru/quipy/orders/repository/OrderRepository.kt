@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service
 import ru.quipy.apigateway.APIController.Order
 import ru.quipy.streams.AggregateSubscriptionsManager
 import java.time.Duration
-import java.util.*
+import java.util.UUID
 
 @Service
 class OrderRepository {

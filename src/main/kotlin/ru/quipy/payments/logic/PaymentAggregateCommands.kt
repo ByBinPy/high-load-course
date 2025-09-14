@@ -4,7 +4,7 @@ import ru.quipy.payments.api.PaymentCreatedEvent
 import ru.quipy.payments.api.PaymentProcessedEvent
 import ru.quipy.payments.api.PaymentSubmittedEvent
 import java.time.Duration
-import java.util.*
+import java.util.UUID
 
 
 fun PaymentAggregateState.create(id: UUID, orderId: UUID, amount: Int): PaymentCreatedEvent {

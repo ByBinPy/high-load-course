@@ -3,7 +3,7 @@ package ru.quipy.payments.api
 import ru.quipy.core.annotations.DomainEvent
 import ru.quipy.domain.Event
 import java.time.Duration
-import java.util.*
+import java.util.UUID
 
 const val PAYMENT_CREATED_EVENT = "PAYMENT_CREATED_EVENT"
 const val PAYMENT_SUBMITTED_EVENT = "PAYMENT_SUBMITTED_EVENT"

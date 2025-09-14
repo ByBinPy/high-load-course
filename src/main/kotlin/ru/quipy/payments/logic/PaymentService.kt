@@ -1,7 +1,7 @@
 package ru.quipy.payments.logic
 
 import java.time.Duration
-import java.util.*
+import java.util.UUID
 
 interface PaymentService {
     /**
