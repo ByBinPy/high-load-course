@@ -29,19 +29,19 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        32,
-        0L,
-        TimeUnit.MILLISECONDS,
-        ArrayBlockingQueue(16_000),
+        12,
+        24,
+        60L,
+        TimeUnit.SECONDS,
+        ArrayBlockingQueue(1_000),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler()
     )
 
     private val rateLimiter = LeakingBucketRateLimiter(
-        rate = 9,  // Немного меньше текущего
+        rate = 11,  // Немного меньше текущего
         window = Duration.ofSeconds(1),
-        bucketSize = 14 // Буфер для пиковых нагрузок
+        bucketSize = 22 // Буфер для пиковых нагрузок
     )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
@@ -49,7 +49,7 @@ class OrderPayer {
 
 
         while (!rateLimiter.tick()) {
-            Thread.sleep(1500)
+            Thread.sleep(1200)
         }
 
         paymentExecutor.submit {
