@@ -6,7 +6,7 @@ Content-Type: application/json
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "branch": "main",
+  "branch": "feature/highload-leaky-bucket-case1",
   "accounts": "acc-3",
   "ratePerSecond": 11,
   "testCount": 1200,

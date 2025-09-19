@@ -5,13 +5,11 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
-import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import java.time.Duration
 import java.util.*
-import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -29,29 +27,17 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        9,
-        12,
+        16,
+        16,
         0L,
         TimeUnit.MILLISECONDS,
-        ArrayBlockingQueue(8_000),
+        LinkedBlockingQueue(8_000),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val rateLimiter = LeakingBucketRateLimiter(
-        rate = 11,
-        window = Duration.ofSeconds(1),
-        bucketSize = 22
-    )
-
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-
-
-        while (!rateLimiter.tick()) {
-            Thread.sleep(1500)
-        }
-
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
