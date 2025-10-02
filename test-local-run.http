@@ -5,11 +5,31 @@ Content-Type: application/json
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "ratePerSecond": 1,
+  "ratePerSecond": 2,
   "testCount": 100,
-  "processingTimeMillis": 80000
+  "processingTimeMillis": 60000
 }
 
 ### Stop running test to save time and resources
 # @timeout 120
 POST http://localhost:1234/test/stop/{{serviceName}}
+
+# PaymentAccountProperties(
+#     serviceName=cas-m3404-05,
+#     accountName=acc-3,
+#     parallelRequests=30,
+#     rateLimitPerSec=10,
+#     price=30,
+#     averageProcessingTime=PT1S,
+#     enabled=true
+# )
+
+# PaymentAccountProperties(
+#    serviceName=cas-m3404-05,
+#    accountName=acc-5,
+#    parallelRequests=5,
+#    rateLimitPerSec=3,
+#    price=30,
+#    averageProcessingTime=PT4.9S,
+#    enabled=true
+#)
