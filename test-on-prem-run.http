@@ -6,11 +6,11 @@ Content-Type: application/json
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "branch": "main",
-  "accounts": "acc-3",
-  "ratePerSecond": 11,
-  "testCount": 1200,
-  "processingTimeMillis": 80000,
+  "branch": "feature/high-load-kuro-hw-4",
+  "accounts": "acc-23",
+  "ratePerSecond": 16,
+  "testCount": 16000,
+  "processingTimeMillis": 30000,
   "onPremises": true
 }
 

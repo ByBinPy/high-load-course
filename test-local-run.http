@@ -33,3 +33,6 @@ POST http://localhost:1234/test/stop/{{serviceName}}
 #    averageProcessingTime=PT4.9S,
 #    enabled=true
 #)
+
+
+# Пу-пу-пу будем играть
