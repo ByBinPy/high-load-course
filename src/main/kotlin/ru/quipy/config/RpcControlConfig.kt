@@ -6,26 +6,23 @@ import org.springframework.context.annotation.Configuration
 import ru.quipy.common.utils.CompositeRateLimiter
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.RateLimiter
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.payments.logic.PaymentAccountProperties
 import java.time.Duration
 import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 @Configuration
 class RpcControlConfig {
 
     @Bean
     fun getRateLimiter(accountProperties: PaymentAccountProperties): RateLimiter =
-        CompositeRateLimiter(
-            TokenBucketRateLimiter(
-                accountProperties.rateLimitPerSec, accountProperties.parallelRequests,
-                Duration.ofSeconds(1).toMillis()
-            ), LeakingBucketRateLimiter(
+       CompositeRateLimiter(SlidingWindowRateLimiter(accountProperties.rateLimitPerSec.toLong()/2, Duration.ofMillis(500)), LeakingBucketRateLimiter(
                 accountProperties.rateLimitPerSec.toLong(),
                 Duration.ofMillis(1),
-                accountProperties.parallelRequests
-            )
-        )
+                accountProperties.rateLimitPerSec ))
+
 
     @Bean
     @Qualifier("parallelLimiter")

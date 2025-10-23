@@ -9,7 +9,7 @@ import ru.quipy.exceptions.TooManyRequestsException
 
 @RestControllerAdvice
 class GlobalExceptionHandler(
-    private val maxWait: String = "3",
+    private val maxWait: String = "4",
 ) {
     companion object {
         val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
@@ -17,6 +17,7 @@ class GlobalExceptionHandler(
 
     @ExceptionHandler(TooManyRequestsException::class)
     fun handleTooManyRequests(): ResponseEntity<String> {
+        logger.warn("Too many requests - returning 429")
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
             .header("Retry-After", maxWait)
