@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
@@ -47,10 +48,19 @@ class OrderPayer(
         )
     }
 
-    private val rateLimit: SlidingWindowRateLimiter by lazy {
+    private val slidingWindowRateLimiter: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
             rate = accountProperties.rateLimitPerSec.toLong(),
             window = Duration.ofSeconds(1),
+        )
+    }
+
+    private val tokenBucketRateLimiter: TokenBucketRateLimiter by lazy {
+        TokenBucketRateLimiter(
+            rate = accountProperties.rateLimitPerSec,
+            bucketMaxCapacity = accountProperties.rateLimitPerSec * 2,
+            window = 1,
+            timeUnit = TimeUnit.SECONDS
         )
     }
 
@@ -58,11 +68,14 @@ class OrderPayer(
         val createdAt = System.currentTimeMillis()
         paymentProcessingPlannedCounter.increment()
 
+
+        val allowedByBothLimiters = slidingWindowRateLimiter.tick() && tokenBucketRateLimiter.tick()
+        if (!allowedByBothLimiters) {
+            throw TooManyRequestsException()
+        }
+
         val task = Runnable {
             parallelLimiter.acquire()
-            while (!rateLimit.tick()) {
-                Thread.sleep(Random().nextInt(0, 10).toLong())
-            }
             paymentProcessingStartedCounter.increment()
             try {
                 val createdEvent = paymentESService.create {
