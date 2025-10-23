@@ -9,7 +9,7 @@ import ru.quipy.exceptions.TooManyRequestsException
 
 @RestControllerAdvice
 class GlobalExceptionHandler(
-    private val maxWait: String = "3",
+    private val maxWait: String = "1",
 ) {
     companion object {
         val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
