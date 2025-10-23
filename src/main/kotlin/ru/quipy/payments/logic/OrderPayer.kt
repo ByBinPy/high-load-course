@@ -6,18 +6,15 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
-import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
+import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.payments.dto.Transaction
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.Semaphore
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import kotlin.random.Random
+import java.util.concurrent.*
 
 @Service
 class OrderPayer(
@@ -27,10 +24,12 @@ class OrderPayer(
     @field:Qualifier("parallelLimiter")
     private val parallelLimiter: Semaphore,
 ) {
-
-    private val paymentProcessingPlannedCounter: Counter = Metrics.counter("payment.processing.planned", "accountName", accountProperties.accountName)
-    private val paymentProcessingStartedCounter: Counter = Metrics.counter("payment.processing.started", "accountName", accountProperties.accountName)
-    private val paymentProcessingCompletedCounter: Counter = Metrics.counter("payment.processing.completed", "accountName", accountProperties.accountName)
+    private val paymentProcessingPlannedCounter: Counter =
+        Metrics.counter("payment.processing.planned", "accountName", accountProperties.accountName)
+    private val paymentProcessingStartedCounter: Counter =
+        Metrics.counter("payment.processing.started", "accountName", accountProperties.accountName)
+    private val paymentProcessingCompletedCounter: Counter =
+        Metrics.counter("payment.processing.completed", "accountName", accountProperties.accountName)
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
@@ -42,9 +41,9 @@ class OrderPayer(
             accountProperties.parallelRequests,
             0L,
             TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue(accountProperties.parallelRequests * 10),
+            ArrayBlockingQueue<Runnable>(accountProperties.parallelRequests),
             NamedThreadFactory("payment-submission-executor"),
-            CallerBlockingRejectedExecutionHandler()
+            ThreadPoolExecutor.AbortPolicy()
         )
     }
 
@@ -57,32 +56,38 @@ class OrderPayer(
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-
         paymentProcessingPlannedCounter.increment()
-        parallelLimiter.acquire()
 
-        return try {
+        val task = Runnable {
+            parallelLimiter.acquire()
             while (!rateLimit.tick()) {
-                Thread.sleep(Random.nextLong(0, 100))
+                Thread.sleep(Random().nextInt(0, 10).toLong())
             }
-
-            paymentExecutor.submit {
-                paymentProcessingStartedCounter.increment()
-                try {
-                    val createdEvent = paymentESService.create {
-                        it.create(paymentId, orderId, amount)
-                    }
-                    logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
-                    paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-                } finally {
-                    parallelLimiter.release()
-                    paymentProcessingCompletedCounter.increment()
+            paymentProcessingStartedCounter.increment()
+            try {
+                val createdEvent = paymentESService.create {
+                    it.create(paymentId, orderId, amount)
                 }
+                logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
+                paymentService.submitPaymentRequest(
+                    paymentId,
+                    amount,
+                    createdAt,
+                    deadline
+                )
+            } finally {
+                parallelLimiter.release()
+                paymentProcessingCompletedCounter.increment()
             }
-            createdAt
-        } catch (e: Exception) {
-            parallelLimiter.release()
-            throw e
+        }
+
+        val transaction = Transaction(orderId, amount, paymentId, deadline, task)
+
+        try {
+            paymentExecutor.execute(transaction)
+            return createdAt
+        } catch (_: RejectedExecutionException) {
+            throw TooManyRequestsException()
         }
     }
 }
