@@ -3,12 +3,18 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.RateLimiter
+import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.util.*
 
 @RestController
-class APIController(private val orderRepository: OrderRepository, private val orderPayer: OrderPayer) {
+class APIController(
+    private val orderRepository: OrderRepository,
+    private val orderPayer: OrderPayer,
+    private val rateLimiter: RateLimiter
+) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
@@ -49,6 +55,9 @@ class APIController(private val orderRepository: OrderRepository, private val or
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+        if (!rateLimiter.tick()) {
+            throw TooManyRequestsException()
+        }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))

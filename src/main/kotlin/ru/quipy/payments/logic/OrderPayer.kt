@@ -6,6 +6,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
+import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -14,7 +15,10 @@ import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.dto.Transaction
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.*
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Semaphore
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 @Service
 class OrderPayer(
@@ -43,7 +47,7 @@ class OrderPayer(
             TimeUnit.MILLISECONDS,
             ArrayBlockingQueue<Runnable>(accountProperties.parallelRequests),
             NamedThreadFactory("payment-submission-executor"),
-            ThreadPoolExecutor.AbortPolicy()
+            CallerBlockingRejectedExecutionHandler()
         )
     }
 
@@ -60,8 +64,9 @@ class OrderPayer(
 
         val task = Runnable {
             parallelLimiter.acquire()
-            while (!rateLimit.tick()) {
-                Thread.sleep(Random().nextInt(0, 10).toLong())
+            if (!rateLimit.tick()) {
+                parallelLimiter.release()
+                throw TooManyRequestsException()
             }
             paymentProcessingStartedCounter.increment()
             try {
@@ -82,12 +87,23 @@ class OrderPayer(
         }
 
         val transaction = Transaction(orderId, amount, paymentId, deadline, task)
-
-        try {
-            paymentExecutor.execute(transaction)
-            return createdAt
-        } catch (_: RejectedExecutionException) {
-            throw TooManyRequestsException()
-        }
+        paymentExecutor.execute(transaction)
+        return createdAt
     }
 }
+
+
+/**
+ *     "serviceName": "cas-m3404",
+ *     "accountName": "acc-23",
+ *     "parallelRequests": 64,
+ *     "rateLimitPerSec": 11,
+ *     "price": 30,
+ *     "averageProcessingTime": "PT1S"
+
+ *   "accounts": "acc-23",
+ *   "ratePerSecond": 15,
+ *   "testCount": 3000,
+ *   "processingTimeMillis": 2500
+ * }
+ */
