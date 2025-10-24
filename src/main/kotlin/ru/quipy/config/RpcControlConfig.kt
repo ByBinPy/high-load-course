@@ -9,7 +9,6 @@ import ru.quipy.common.utils.RateLimiter
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.payments.logic.PaymentAccountProperties
-import java.time.Duration
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
@@ -18,11 +17,7 @@ class RpcControlConfig {
 
     @Bean
     fun getRateLimiter(accountProperties: PaymentAccountProperties): RateLimiter =
-       CompositeRateLimiter(SlidingWindowRateLimiter(accountProperties.rateLimitPerSec.toLong()/2, Duration.ofMillis(500)), LeakingBucketRateLimiter(
-                accountProperties.rateLimitPerSec.toLong(),
-                Duration.ofMillis(1),
-                accountProperties.rateLimitPerSec ))
-
+        TokenBucketRateLimiter(6, 11, 500, TimeUnit.MILLISECONDS )
 
     @Bean
     @Qualifier("parallelLimiter")

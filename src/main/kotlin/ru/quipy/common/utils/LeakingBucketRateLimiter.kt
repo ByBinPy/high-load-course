@@ -19,6 +19,7 @@ class LeakingBucketRateLimiter(
     private val queue = LinkedBlockingQueue<Int>(bucketSize)
 
     override fun tick(): Boolean {
+        logger.info("RateLimiter: queue size before offer: ${queue.size}")
         return queue.offer(1)
     }
 
@@ -28,6 +29,7 @@ class LeakingBucketRateLimiter(
             for (i in 1..rate) {
                 queue.poll()
             }
+            logger.info("RateLimiter: queue size after cleaning: ${queue.size}")
         }
     }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
 

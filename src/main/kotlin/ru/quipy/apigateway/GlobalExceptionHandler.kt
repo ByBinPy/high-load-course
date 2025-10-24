@@ -6,10 +6,10 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 import ru.quipy.exceptions.TooManyRequestsException
+import kotlin.random.Random
 
 @RestControllerAdvice
 class GlobalExceptionHandler(
-    private val maxWait: String = "4",
 ) {
     companion object {
         val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
@@ -20,7 +20,7 @@ class GlobalExceptionHandler(
         logger.warn("Too many requests - returning 429")
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", maxWait)
+            .header("Retry-After", "${Random.nextInt(30000, 40000)}")
             .build()
     }
 }

@@ -6,7 +6,6 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
-import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -15,10 +14,7 @@ import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.dto.Transaction
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.Semaphore
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.*
 
 @Service
 class OrderPayer(
@@ -47,7 +43,7 @@ class OrderPayer(
             TimeUnit.MILLISECONDS,
             ArrayBlockingQueue<Runnable>(accountProperties.parallelRequests),
             NamedThreadFactory("payment-submission-executor"),
-            CallerBlockingRejectedExecutionHandler()
+            ThreadPoolExecutor.AbortPolicy()
         )
     }
 
@@ -64,9 +60,8 @@ class OrderPayer(
 
         val task = Runnable {
             parallelLimiter.acquire()
-            if (!rateLimit.tick()) {
-                parallelLimiter.release()
-                throw TooManyRequestsException()
+            while (!rateLimit.tick()) {
+                Thread.sleep(Random().nextInt(0, 10).toLong())
             }
             paymentProcessingStartedCounter.increment()
             try {
@@ -87,11 +82,15 @@ class OrderPayer(
         }
 
         val transaction = Transaction(orderId, amount, paymentId, deadline, task)
-        paymentExecutor.execute(transaction)
-        return createdAt
+
+        try {
+            paymentExecutor.execute(transaction)
+            return createdAt
+        } catch (_: RejectedExecutionException) {
+            throw TooManyRequestsException()
+        }
     }
 }
-
 
 /**
  *     "serviceName": "cas-m3404",
