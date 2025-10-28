@@ -10,7 +10,7 @@ import kotlin.random.Random
 
 @RestControllerAdvice
 class GlobalExceptionHandler(
-    private val maxWait: Int = 1_000,
+    private val maxWait: Int = 1_000
 ) {
     companion object {
         val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
