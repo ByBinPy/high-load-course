@@ -11,6 +11,7 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import kotlin.math.pow
 
 
 // Advice: always treat time as a Duration
@@ -59,12 +60,28 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
+            var isCompletedRequest = false
+            var retryCount = 0
+            while (!isCompletedRequest && now() < deadline) {
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
                 } catch (e: Exception) {
                     logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
                     ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                }
+
+                if (body.message?.contains("Temporary error") == true) {
+                    if (retryCount < 7) {
+                        retryCount++
+                        val backoffTime = (2.0.pow(retryCount.toDouble()) * 10 + Random().nextLong(0, 10)).toLong()
+                        Thread.sleep(backoffTime)
+                        continue
+                    } else {
+                        isCompletedRequest = true
+                    }
+                } else {
+                    isCompletedRequest = true
                 }
 
                 logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
@@ -75,6 +92,7 @@ class PaymentExternalSystemAdapterImpl(
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
             }
+            }
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -83,7 +101,6 @@ class PaymentExternalSystemAdapterImpl(
                         it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                     }
                 }
-
                 else -> {
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
 
