@@ -50,19 +50,19 @@ class OrderPayer(
     private val rateLimit: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
             rate = accountProperties.rateLimitPerSec.toLong(),
-            window = Duration.ofSeconds(1),
+            window = Duration.ofMillis(1000),
         )
     }
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         paymentProcessingPlannedCounter.increment()
+        parallelLimiter.acquire()
+        while (!rateLimit.tick()) {
+            Thread.sleep(10)
+        }
 
         val task = Runnable {
-            parallelLimiter.acquire()
-            while (!rateLimit.tick()) {
-                Thread.sleep(Random().nextInt(0, 10).toLong())
-            }
             paymentProcessingStartedCounter.increment()
             try {
                 val createdEvent = paymentESService.create {

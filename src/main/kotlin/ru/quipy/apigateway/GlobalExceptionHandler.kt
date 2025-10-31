@@ -20,7 +20,7 @@ class GlobalExceptionHandler(
         logger.warn("Too many requests - returning 429")
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", "${Random.nextInt(30000, 40000)}")
+            .header("Retry-After", "10")
             .build()
     }
 }

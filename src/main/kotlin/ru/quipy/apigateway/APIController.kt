@@ -3,17 +3,19 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.RateLimiter
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import java.time.Duration
 import java.util.*
 
 @RestController
 class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
-    private val rateLimiter: RateLimiter
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(11, Duration.ofSeconds(1), 120)
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
