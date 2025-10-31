@@ -6,6 +6,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
+import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.CompositeRateLimiter
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
@@ -50,87 +51,70 @@ class OrderPayer(
             accountProperties.parallelRequests,
             0L,
             TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue<Runnable>(accountProperties.parallelRequests * 2),
+            LinkedBlockingQueue<Runnable>(accountProperties.parallelRequests),
             NamedThreadFactory("payment-submission-executor"),
-            ThreadPoolExecutor.CallerRunsPolicy()
+            ThreadPoolExecutor.AbortPolicy()
         )
     }
 
     private val slidingWindowRateLimiter: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
-            rate = (accountProperties.rateLimitPerSec * 1.00).toLong(),
-            window = Duration.ofMillis(500)
+            rate = (accountProperties.rateLimitPerSec).toLong(),
+            window = Duration.ofMillis(1060)
         )
     }
 
-    private val tokenBucketRateLimiter: TokenBucketRateLimiter by lazy {
-        TokenBucketRateLimiter(
-            rate = accountProperties.rateLimitPerSec,
-            bucketMaxCapacity = 140,
-            window = 1,
-            startBucket = 0,
-            timeUnit = TimeUnit.SECONDS
-        )
-    }
-
-
-    val leakingBucketRateLimiter = LeakingBucketRateLimiter(
-        rate = 11,
-        window = Duration.ofMillis(950),
-        bucketSize = 50
-    )
-
-    private val compositeRateLimiter = CompositeRateLimiter(
-        slidingWindowRateLimiter,
-        tokenBucketRateLimiter,
-        mode = CompositeRateLimiter.Mode.AND
-    )
-
-    private fun calculateRetryAfter(): Int {
-        return when {
-            accountProperties.rateLimitPerSec <= 3 -> 3_000
-            accountProperties.rateLimitPerSec <= 11 -> 2_000
-            else -> 1_000
-        }
-    }
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         paymentProcessingPlannedCounter.increment()
 
-        if (!leakingBucketRateLimiter.tick()) {
+        val start = System.currentTimeMillis()
+        val maxWait = 11_500L // 13 сек
+
+        if (!parallelLimiter.tryAcquire(maxWait, TimeUnit.MILLISECONDS)) {
             paymentProcessingRejectedCounter.increment()
-            throw TooManyRequestsException(retryAfterSeconds = calculateRetryAfter())
+            throw TooManyRequestsException(10)
         }
-
-        val task = Runnable {
-            parallelLimiter.acquire()
-            paymentProcessingStartedCounter.increment()
-            try {
-                val createdEvent = paymentESService.create {
-                    it.create(paymentId, orderId, amount)
-                }
-                logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
-                paymentService.submitPaymentRequest(
-                    paymentId,
-                    amount,
-                    createdAt,
-                    deadline
-                )
-            } finally {
-                parallelLimiter.release()
-                paymentProcessingCompletedCounter.increment()
-            }
-        }
-
-        val transaction = Transaction(orderId, amount, paymentId, deadline, task)
 
         try {
+            while (!slidingWindowRateLimiter.tick()) {
+                if (System.currentTimeMillis() - start >= maxWait) {
+                    paymentProcessingRejectedCounter.increment()
+                    parallelLimiter.release()
+                    throw TooManyRequestsException(10)
+                }
+                Thread.sleep(2)
+            }
+            val task = Runnable {
+
+                paymentProcessingStartedCounter.increment()
+                try {
+                    val createdEvent = paymentESService.create {
+                        it.create(paymentId, orderId, amount)
+                    }
+                    logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
+                    paymentService.submitPaymentRequest(
+                        paymentId,
+                        amount,
+                        createdAt,
+                        deadline
+                    )
+                } finally {
+                    parallelLimiter.release()
+                    paymentProcessingCompletedCounter.increment()
+                }
+            }
+
+            val transaction = Transaction(orderId, amount, paymentId, deadline, task)
+
             paymentExecutor.execute(transaction)
             return createdAt
         } catch (_: RejectedExecutionException) {
+            logger.info("Xui")
             paymentProcessingRejectedCounter.increment()
-            throw TooManyRequestsException(retryAfterSeconds = calculateRetryAfter())
+            parallelLimiter.release()
+            throw TooManyRequestsException(retryAfterMillisecond = 10)
         }
     }
 }

@@ -14,7 +14,6 @@ class CallerBlockingRejectedExecutionHandler(
         val logger = LoggerFactory.getLogger(CallerBlockingRejectedExecutionHandler::class.java)
     }
 
-    // Even if event is rejected we will still keep it, trying to put in queue so that not to lose it!
     override fun rejectedExecution(r: Runnable, executor: ThreadPoolExecutor) {
         if (!executor.isShutdown) {
             try {

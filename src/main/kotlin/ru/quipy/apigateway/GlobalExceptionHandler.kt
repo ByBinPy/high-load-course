@@ -6,21 +6,21 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 import ru.quipy.exceptions.TooManyRequestsException
-import kotlin.random.Random
 
 @RestControllerAdvice
-class GlobalExceptionHandler(
-    private val maxWait: Int = 1_000
-) {
+class GlobalExceptionHandler() {
     companion object {
         val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
     }
 
     @ExceptionHandler(TooManyRequestsException::class)
-    fun handleTooManyRequests(): ResponseEntity<Int> {
+    fun handleTooManyRequests(ex: TooManyRequestsException): ResponseEntity<Int> {
+
+        logger.info("Retry-After: {}", ex.retryAfterMillisecond)
+
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", maxWait.toString())
+            .header("Retry-After", ex.retryAfterMillisecond.toString())
             .build()
     }
 }

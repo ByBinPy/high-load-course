@@ -3,9 +3,12 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.TokenBucketRateLimiter
+import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 @RestController
 class APIController(private val orderRepository: OrderRepository, private val orderPayer: OrderPayer) {
@@ -21,8 +24,20 @@ class APIController(private val orderRepository: OrderRepository, private val or
 
     data class User(val id: UUID, val name: String)
 
+    private val tokenBucketRateLimiter: TokenBucketRateLimiter by lazy {
+        TokenBucketRateLimiter(
+            rate = 11,
+            bucketMaxCapacity = 140,
+            window = 1000,
+            startBucket = 140,
+            timeUnit = TimeUnit.MILLISECONDS
+        )
+    }
+
+
     @PostMapping("/orders")
     fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -49,6 +64,11 @@ class APIController(private val orderRepository: OrderRepository, private val or
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+
+        if (!tokenBucketRateLimiter.tick()) {
+            throw TooManyRequestsException(retryAfterMillisecond = 50)
+        }
+
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
