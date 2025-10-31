@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.RateLimiter
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
@@ -15,7 +16,7 @@ import java.util.*
 class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
-    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(11, Duration.ofSeconds(1), 120)
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(10, Duration.ofSeconds(1), 10)
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
@@ -57,9 +58,6 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        if (!rateLimiter.tick()) {
-            throw TooManyRequestsException()
-        }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
