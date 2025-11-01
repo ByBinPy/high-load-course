@@ -64,57 +64,41 @@ class OrderPayer(
         )
     }
 
-
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         paymentProcessingPlannedCounter.increment()
 
-        val start = System.currentTimeMillis()
-        val maxWait = 11_500L // 13 сек
+        val task = Runnable {
 
-        if (!parallelLimiter.tryAcquire(maxWait, TimeUnit.MILLISECONDS)) {
-            paymentProcessingRejectedCounter.increment()
-            throw TooManyRequestsException(10)
+            while (!slidingWindowRateLimiter.tick()) {
+                Thread.sleep(3)
+            }
+
+            paymentProcessingStartedCounter.increment()
+            try {
+                val createdEvent = paymentESService.create {
+                    it.create(paymentId, orderId, amount)
+                }
+                logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
+                paymentService.submitPaymentRequest(
+                    paymentId,
+                    amount,
+                    createdAt,
+                    deadline
+                )
+            } finally {
+                paymentProcessingCompletedCounter.increment()
+            }
         }
 
+        val transaction = Transaction(orderId, amount, paymentId, deadline, task)
+
         try {
-            while (!slidingWindowRateLimiter.tick()) {
-                if (System.currentTimeMillis() - start >= maxWait) {
-                    paymentProcessingRejectedCounter.increment()
-                    parallelLimiter.release()
-                    throw TooManyRequestsException(10)
-                }
-                Thread.sleep(2)
-            }
-            val task = Runnable {
-
-                paymentProcessingStartedCounter.increment()
-                try {
-                    val createdEvent = paymentESService.create {
-                        it.create(paymentId, orderId, amount)
-                    }
-                    logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
-                    paymentService.submitPaymentRequest(
-                        paymentId,
-                        amount,
-                        createdAt,
-                        deadline
-                    )
-                } finally {
-                    parallelLimiter.release()
-                    paymentProcessingCompletedCounter.increment()
-                }
-            }
-
-            val transaction = Transaction(orderId, amount, paymentId, deadline, task)
-
             paymentExecutor.execute(transaction)
             return createdAt
         } catch (_: RejectedExecutionException) {
-            logger.info("Xui")
             paymentProcessingRejectedCounter.increment()
-            parallelLimiter.release()
-            throw TooManyRequestsException(retryAfterMillisecond = 10)
+            throw TooManyRequestsException(retryAfterMillisecond = 5)
         }
     }
 }

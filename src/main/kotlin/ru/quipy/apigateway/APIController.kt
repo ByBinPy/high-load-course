@@ -3,10 +3,12 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import java.time.Duration
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -27,9 +29,9 @@ class APIController(private val orderRepository: OrderRepository, private val or
     private val tokenBucketRateLimiter: TokenBucketRateLimiter by lazy {
         TokenBucketRateLimiter(
             rate = 11,
-            bucketMaxCapacity = 140,
+            bucketMaxCapacity = 130,
             window = 1000,
-            startBucket = 140,
+            startBucket = 130,
             timeUnit = TimeUnit.MILLISECONDS
         )
     }
@@ -66,7 +68,7 @@ class APIController(private val orderRepository: OrderRepository, private val or
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
 
         if (!tokenBucketRateLimiter.tick()) {
-            throw TooManyRequestsException(retryAfterMillisecond = 50)
+            throw TooManyRequestsException(retryAfterMillisecond = 10)
         }
 
         val paymentId = UUID.randomUUID()
