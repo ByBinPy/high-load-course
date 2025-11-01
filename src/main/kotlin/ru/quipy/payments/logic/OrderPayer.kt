@@ -68,11 +68,12 @@ class OrderPayer(
         val createdAt = System.currentTimeMillis()
         paymentProcessingPlannedCounter.increment()
 
-        val task = Runnable {
+        while (!slidingWindowRateLimiter.tick()) {
+            throw TooManyRequestsException(retryAfterMillisecond = 150)
+//                Thread.sleep(1)
+        }
 
-            while (!slidingWindowRateLimiter.tick()) {
-                Thread.sleep(1)
-            }
+        val task = Runnable {
 
             paymentProcessingStartedCounter.increment()
             try {
