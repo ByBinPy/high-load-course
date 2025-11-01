@@ -71,7 +71,7 @@ class OrderPayer(
         val task = Runnable {
 
             while (!slidingWindowRateLimiter.tick()) {
-                Thread.sleep(3)
+                Thread.sleep(1)
             }
 
             paymentProcessingStartedCounter.increment()
