@@ -1,3 +1,3 @@
 package ru.quipy.exceptions
 
-class TooManyRequestsException() : RuntimeException()
+class TooManyRequestsException(val retryAfterMillisecond: Int) : RuntimeException()

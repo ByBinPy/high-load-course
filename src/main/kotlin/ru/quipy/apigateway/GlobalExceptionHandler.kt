@@ -8,18 +8,19 @@ import org.springframework.web.bind.annotation.RestControllerAdvice
 import ru.quipy.exceptions.TooManyRequestsException
 
 @RestControllerAdvice
-class GlobalExceptionHandler(
-    private val maxWait: String = "3",
-) {
+class GlobalExceptionHandler() {
     companion object {
         val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
     }
 
     @ExceptionHandler(TooManyRequestsException::class)
-    fun handleTooManyRequests(): ResponseEntity<String> {
+    fun handleTooManyRequests(ex: TooManyRequestsException): ResponseEntity<Int> {
+
+        logger.info("Retry-After: {}", ex.retryAfterMillisecond)
+
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", maxWait)
+            .header("Retry-After", ex.retryAfterMillisecond.toString())
             .build()
     }
 }

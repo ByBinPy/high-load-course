@@ -6,14 +6,50 @@ Content-Type: application/json
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "branch": "feature/high-load-kuro-hw-4",
-  "accounts": "acc-23",
-  "ratePerSecond": 16,
-  "testCount": 16000,
-  "processingTimeMillis": 30000,
-  "onPremises": true
+  "ratePerSecond": 3,
+  "testCount": 1050,
+  "processingTimeMillis": 26000,
+  "runits": 90
 }
 
 ### Stop running test to save credits
 # @timeout 120
 POST http://77.234.215.138:31234/test/stop/{{serviceName}}
+
+
+
+
+#Test #1
+#{
+#  "serviceName": "{{serviceName}}",
+#  "token": "{{token}}",
+#  "branch": "feature/kuro-hw-5",
+#  "accounts": "acc-23",
+#  "ratePerSecond": 16,
+#  "testCount": 3000,
+#  "processingTimeMillis": 2500,
+#  "onPremises": true
+#}
+
+#Test #2
+#{
+#  "serviceName": "{{serviceName}}",
+#  "token": "{{token}}",
+#  "branch": "feature/kuro-hw-5",
+#  "accounts": "acc-23",
+#  "ratePerSecond": 11,
+#  "testCount": 2200,
+#  "processingTimeMillis": 13000,
+#  "profile": "s_0.7_60"
+#  "onPremises": true
+#}
+
+#Test #3
+#{
+#  "serviceName": "{{serviceName}}",
+#  "token": "{{token}}",
+#  "ratePerSecond": 3,
+#  "testCount": 1050,
+#  "processingTimeMillis": 26000,
+#  "runits": 90
+#}

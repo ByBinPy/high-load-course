@@ -6,8 +6,12 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
+import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
+import ru.quipy.common.utils.CompositeRateLimiter
+import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
@@ -15,6 +19,8 @@ import ru.quipy.payments.dto.Transaction
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.*
+import kotlin.compareTo
+import kotlin.random.Random
 
 @Service
 class OrderPayer(
@@ -30,6 +36,8 @@ class OrderPayer(
         Metrics.counter("payment.processing.started", "accountName", accountProperties.accountName)
     private val paymentProcessingCompletedCounter: Counter =
         Metrics.counter("payment.processing.completed", "accountName", accountProperties.accountName)
+    private val paymentProcessingRejectedCounter: Counter =
+        Metrics.counter("payment.processing.rejected", "accountName", accountProperties.accountName)
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
@@ -41,16 +49,16 @@ class OrderPayer(
             accountProperties.parallelRequests,
             0L,
             TimeUnit.MILLISECONDS,
-            ArrayBlockingQueue<Runnable>(accountProperties.parallelRequests),
+            LinkedBlockingQueue<Runnable>(accountProperties.parallelRequests),
             NamedThreadFactory("payment-submission-executor"),
             ThreadPoolExecutor.AbortPolicy()
         )
     }
 
-    private val rateLimit: SlidingWindowRateLimiter by lazy {
+    private val slidingWindowRateLimiter: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
-            rate = accountProperties.rateLimitPerSec.toLong(),
-            window = Duration.ofSeconds(1),
+            rate = (accountProperties.rateLimitPerSec).toLong(),
+            window = Duration.ofMillis(1050)
         )
     }
 
@@ -58,11 +66,13 @@ class OrderPayer(
         val createdAt = System.currentTimeMillis()
         paymentProcessingPlannedCounter.increment()
 
+        while (!slidingWindowRateLimiter.tick()) {
+//            throw TooManyRequestsException(retryAfterMillisecond = 150)
+            Thread.sleep(1)
+        }
+
         val task = Runnable {
-            parallelLimiter.acquire()
-            while (!rateLimit.tick()) {
-                Thread.sleep(Random().nextInt(0, 10).toLong())
-            }
+
             paymentProcessingStartedCounter.increment()
             try {
                 val createdEvent = paymentESService.create {
@@ -76,7 +86,6 @@ class OrderPayer(
                     deadline
                 )
             } finally {
-                parallelLimiter.release()
                 paymentProcessingCompletedCounter.increment()
             }
         }
@@ -87,7 +96,8 @@ class OrderPayer(
             paymentExecutor.execute(transaction)
             return createdAt
         } catch (_: RejectedExecutionException) {
-            throw TooManyRequestsException()
+            paymentProcessingRejectedCounter.increment()
+            throw TooManyRequestsException(retryAfterMillisecond = 5)
         }
     }
 }

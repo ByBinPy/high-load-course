@@ -5,34 +5,42 @@ Content-Type: application/json
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "ratePerSecond": 16,
-  "testCount": 16000,
-  "processingTimeMillis": 30000
+  "ratePerSecond": 3,
+  "testCount": 1050,
+  "processingTimeMillis": 26000,
+  "runits": 90
 }
 
 ### Stop running test to save time and resources
 # @timeout 120
 POST http://localhost:1234/test/stop/{{serviceName}}
 
-# PaymentAccountProperties(
-#     serviceName=cas-m3404-05,
-#     accountName=acc-3,
-#     parallelRequests=30,
-#     rateLimitPerSec=10,
-#     price=30,
-#     averageProcessingTime=PT1S,
-#     enabled=true
-# )
 
-# PaymentAccountProperties(
-#    serviceName=cas-m3404-05,
-#    accountName=acc-5,
-#    parallelRequests=5,
-#    rateLimitPerSec=3,
-#    price=30,
-#    averageProcessingTime=PT4.9S,
-#    enabled=true
-#)
+#Test #1
+#{
+#  "serviceName": "{{serviceName}}",
+#  "token": "{{token}}",
+#  "ratePerSecond": 16,
+#  "testCount": 3000,
+#  "processingTimeMillis": 2500
+#}
 
+#Test #2
+#{
+#  "serviceName": "{{serviceName}}",
+#  "token": "{{token}}",
+#  "ratePerSecond": 11,
+#  "testCount": 2200,
+#  "processingTimeMillis": 13000,
+#  "profile": "s_0.7_60"
+#}
 
-# Пу-пу-пу будем играть
+#Test #3
+#{
+#  "serviceName": "{{serviceName}}",
+#  "token": "{{token}}",
+#  "ratePerSecond": 3,
+#  "testCount": 1050,
+#  "processingTimeMillis": 26000,
+#  "runits": 90
+#}
