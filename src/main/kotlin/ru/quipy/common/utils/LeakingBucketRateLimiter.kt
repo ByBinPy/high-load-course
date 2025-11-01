@@ -25,7 +25,7 @@ class LeakingBucketRateLimiter(
     private val releaseJob = rateLimiterScope.launch {
         while (true) {
             delay(window.toMillis())
-            for (i in 0..rate) {
+            for (i in 1..rate) {
                 queue.poll()
             }
         }
