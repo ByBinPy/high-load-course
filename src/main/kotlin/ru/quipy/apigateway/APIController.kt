@@ -3,6 +3,7 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.exceptions.TooManyRequestsException
@@ -28,11 +29,19 @@ class APIController(private val orderRepository: OrderRepository, private val or
 
     private val tokenBucketRateLimiter: TokenBucketRateLimiter by lazy {
         TokenBucketRateLimiter(
-            rate = 16,
-            bucketMaxCapacity = 150,
+            rate = 3,
+            bucketMaxCapacity = 80,
             window = 1000,
-            startBucket = 150,
+            startBucket = 80,
             timeUnit = TimeUnit.MILLISECONDS
+        )
+    }
+
+    private val leakingBucketRateLimiter: LeakingBucketRateLimiter by lazy {
+        LeakingBucketRateLimiter(
+            rate = 3,
+            window = Duration.ofSeconds(1),
+            bucketSize = 3
         )
     }
 
@@ -67,9 +76,9 @@ class APIController(private val orderRepository: OrderRepository, private val or
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
 
-//        if (!tokenBucketRateLimiter.tick()) {
-//            throw TooManyRequestsException(retryAfterMillisecond = 100)
-//        }
+        if (!tokenBucketRateLimiter.tick()) {
+            throw TooManyRequestsException(retryAfterMillisecond = 2_500)
+        }
 
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {

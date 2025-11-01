@@ -36,8 +36,6 @@ class OrderPayer(
         Metrics.counter("payment.processing.started", "accountName", accountProperties.accountName)
     private val paymentProcessingCompletedCounter: Counter =
         Metrics.counter("payment.processing.completed", "accountName", accountProperties.accountName)
-
-    // Новая метрика отказов (rate limit)
     private val paymentProcessingRejectedCounter: Counter =
         Metrics.counter("payment.processing.rejected", "accountName", accountProperties.accountName)
 
@@ -60,7 +58,7 @@ class OrderPayer(
     private val slidingWindowRateLimiter: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
             rate = (accountProperties.rateLimitPerSec).toLong(),
-            window = Duration.ofMillis(1060)
+            window = Duration.ofMillis(1050)
         )
     }
 
@@ -69,8 +67,8 @@ class OrderPayer(
         paymentProcessingPlannedCounter.increment()
 
         while (!slidingWindowRateLimiter.tick()) {
-            throw TooManyRequestsException(retryAfterMillisecond = 150)
-//                Thread.sleep(1)
+//            throw TooManyRequestsException(retryAfterMillisecond = 150)
+            Thread.sleep(1)
         }
 
         val task = Runnable {
