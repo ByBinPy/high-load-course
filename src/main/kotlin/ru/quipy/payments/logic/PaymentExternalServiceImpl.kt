@@ -51,7 +51,7 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private val client = OkHttpClient.Builder()
-        .callTimeout(1100, TimeUnit.MILLISECONDS).build()
+        .callTimeout(1200, TimeUnit.MILLISECONDS).build()
 
     override fun getAccountProperties(): PaymentAccountProperties {
         return properties
@@ -70,7 +70,7 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        if (!rateLimit.tick()) {
+        if (!rateLimit.tickBlocking(timeToDead(deadline))) {
             throw TooManyRequestsException(deadline)
         }
         val exResult = parallelLimiter.tryAcquire(timeToDead(deadline), TimeUnit.MILLISECONDS)
@@ -114,7 +114,7 @@ class PaymentExternalSystemAdapterImpl(
                             e.message
                         )
                     }
-                    isCompletedRequest = if (!body.result && !(response.code == 429 || response.code in 500..504)) {
+                    isCompletedRequest = if (!body.result && !(response.code >= 500 || response.code == 429)) {
                         if (retryCount < 7) {
                             retryCount++
                             val backoffTime = (2.0.pow(retryCount.toDouble()) * 10 + Random().nextLong(0, 10)).toLong()
