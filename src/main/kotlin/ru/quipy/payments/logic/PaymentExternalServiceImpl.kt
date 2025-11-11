@@ -7,6 +7,7 @@ import java.util.concurrent.Semaphore
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okio.IOException
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -51,7 +52,9 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private val client = OkHttpClient.Builder()
-        .callTimeout(1200, TimeUnit.MILLISECONDS).build()
+        .writeTimeout(Duration.ofMillis(1200))
+        .readTimeout(Duration.ofMillis(1200))
+        .callTimeout(1500, TimeUnit.MILLISECONDS).build()
 
     override fun getAccountProperties(): PaymentAccountProperties {
         return properties
@@ -148,6 +151,18 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+                    }
+                }
+                is InterruptedIOException -> {
+                    logger.error("[$accountName] Server timeout for txId: $transactionId, payment: $paymentId", e)
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = "Server timeout")
+                    }
+                }
+                is IOException -> {
+                    logger.error("[$accountName] Server timeout for txId: $transactionId, payment: $paymentId", e)
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = "Server timeout")
                     }
                 }
                 else -> {
