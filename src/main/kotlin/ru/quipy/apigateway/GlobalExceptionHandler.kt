@@ -4,7 +4,10 @@ import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
+import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestControllerAdvice
+import ru.quipy.exceptions.TooManyRequestsRetriableException
+import ru.quipy.exceptions.TooLongRequestException
 import ru.quipy.exceptions.TooManyRequestsException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -22,9 +25,12 @@ class GlobalExceptionHandler(
 
     private val rejectedRequestsCount = AtomicInteger(0)
     private val lastRejectionTime = AtomicLong(0)
-
-    @ExceptionHandler(TooManyRequestsException::class)
-    fun handleTooManyRequests(exception: TooManyRequestsException): ResponseEntity<String> {
+    @ExceptionHandler(TooLongRequestException::class)
+    fun handleTooManyRequests(exception: TooLongRequestException): ResponseEntity<String> {
+        return ResponseEntity.status(200).body("your request very long, i am so sorry")
+    }
+    @ExceptionHandler(TooManyRequestsRetriableException::class)
+    fun handleTooManyRequestsRetriable(exception: TooManyRequestsRetriableException): ResponseEntity<String> {
         logger.warn("to many request")
         val currentTime = System.currentTimeMillis()
         val lastRejection = lastRejectionTime.get()
@@ -43,5 +49,11 @@ class GlobalExceptionHandler(
         }
 
         return ResponseEntity.status(200).build()
+    }
+
+    @ExceptionHandler(TooManyRequestsException::class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    fun handleTooManyRequests(exception: TooManyRequestsException) {
+        logger.warn("Handling TooManyRequestsException: ${exception.message}")
     }
 }
