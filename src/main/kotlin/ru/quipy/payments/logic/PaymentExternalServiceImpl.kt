@@ -52,9 +52,9 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private val client = OkHttpClient.Builder()
-        .writeTimeout(Duration.ofMillis(1200))
-        .readTimeout(Duration.ofMillis(1200))
-        .callTimeout(1500, TimeUnit.MILLISECONDS).build()
+        .writeTimeout(Duration.ofMillis(1000))
+        .readTimeout(Duration.ofMillis(1000))
+        .callTimeout(1150, TimeUnit.MILLISECONDS).build()
 
     override fun getAccountProperties(): PaymentAccountProperties {
         return properties
@@ -92,14 +92,14 @@ class PaymentExternalSystemAdapterImpl(
             var isCompletedRequest = false
             var retryCount = 0
 
-            if (deadline-now() < requestAverageProcessingTime.toMillis()) {
+            if (timeToDead(deadline) < 0) {
                 paymentESService.update(paymentId) {
                     it.logProcessing(false, now(), transactionId, "deadline was expired")
                 }
                 return
             }
             while (!isCompletedRequest && now() < deadline) {
-                if (deadline-now() < requestAverageProcessingTime.toMillis()) {
+                if (timeToDead(deadline) < 0) {
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, "deadline was expired")
                     }
@@ -118,7 +118,7 @@ class PaymentExternalSystemAdapterImpl(
                         )
                     }
                     isCompletedRequest = if (!body.result && !(response.code >= 500 || response.code == 429)) {
-                        if (retryCount < 7) {
+                        if (retryCount < 3) {
                             retryCount++
                             val backoffTime = (2.0.pow(retryCount.toDouble()) * 10 + Random().nextLong(0, 10)).toLong()
                             Thread.sleep(backoffTime)
@@ -140,7 +140,7 @@ class PaymentExternalSystemAdapterImpl(
                 }
             }
 
-            if (deadline < now()) {
+            if (timeToDead(deadline) < 0) {
                 paymentESService.update(paymentId) {
                     it.logProcessing(false, now(), transactionId, "deadline was expired")
                 }
@@ -184,9 +184,8 @@ class PaymentExternalSystemAdapterImpl(
     override fun isEnabled() = properties.enabled
 
     override fun name() = properties.accountName
-
-}
-public fun timeToDead(deadline: Long): Long {
-    return deadline - now()
+    fun timeToDead(deadline: Long): Long {
+        return deadline - now() - requestAverageProcessingTime.toMillis()
+    }
 }
 public fun now() = System.currentTimeMillis()
