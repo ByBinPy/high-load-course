@@ -3,7 +3,6 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
-import java.util.concurrent.Semaphore
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -11,12 +10,12 @@ import okio.IOException
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
-import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
@@ -27,7 +26,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
-    private val meterRegistry: MeterRegistry,
+    meterRegistry: MeterRegistry,
     private val parallelLimiter: Semaphore
 ) : PaymentExternalSystemAdapter {
 
@@ -44,15 +43,9 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
-    private val rateLimit: SlidingWindowRateLimiter by lazy {
-        SlidingWindowRateLimiter(
-            rate = rateLimitPerSec.toLong(),
-            window = Duration.ofMillis(1000),
-        )
-    }
 
     private val client = OkHttpClient.Builder()
-        .callTimeout(1000, TimeUnit.MILLISECONDS).build()
+        .callTimeout(1100, TimeUnit.MILLISECONDS).build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -67,10 +60,12 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        if (!rateLimit.tickBlocking(timeToDead(deadline))) {
-            throw TooManyRequestsException(deadline)
+        if (!parallelLimiter.tryAcquire(timeToDead(deadline), TimeUnit.MILLISECONDS)) {
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, "deadline was expired")
+            }
+            return
         }
-        parallelLimiter.acquire()
         val timeBeforeCall = now()
         try {
             val request = Request.Builder().run {
@@ -174,7 +169,7 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
     fun timeToDead(deadline: Long): Long {
-        return deadline - now() - requestAverageProcessingTime.toMillis() - 200
+        return deadline - now()
     }
 }
 public fun now() = System.currentTimeMillis()
