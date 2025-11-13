@@ -1,5 +1,7 @@
 package ru.quipy.common.utils
 
+import com.github.dockerjava.zerodep.shaded.org.apache.hc.core5.util.Deadline
+import com.github.dockerjava.zerodep.shaded.org.apache.hc.core5.util.Timeout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -36,6 +38,15 @@ class SlidingWindowRateLimiter(
             Thread.sleep(10)
         }
     }
+
+    fun tickBlocking(timeout: Long): Boolean {
+        val timeStarted = System.currentTimeMillis()
+        while (System.currentTimeMillis()-timeStarted < timeout && !tick()) {
+            Thread.sleep(2)
+        }
+        return System.currentTimeMillis()-timeStarted < timeout
+    }
+
 
     data class Measure(
         val value: Long,
