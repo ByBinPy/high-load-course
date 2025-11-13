@@ -2,22 +2,26 @@ package ru.quipy.apigateway
 
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.LeakingBucketRateLimiter
+import ru.quipy.common.utils.RateLimiter
+import ru.quipy.exceptions.TooManyRequestsException
+import ru.quipy.exceptions.TooManyRequestsRetriableException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import java.time.Duration
 import java.util.*
 
 @RestController
-class APIController {
+class APIController(
+    private val orderRepository: OrderRepository,
+    private val orderPayer: OrderPayer,
+    @field:Qualifier("parallelLimiter")
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(8, Duration.ofSeconds(1), 38)
+) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
-
-    @Autowired
-    private lateinit var orderRepository: OrderRepository
-
-    @Autowired
-    private lateinit var orderPayer: OrderPayer
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -56,12 +60,14 @@ class APIController {
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+        if (!rateLimiter.tick()) {
+            throw TooManyRequestsException(deadline)
+        }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
-
 
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
         return PaymentSubmissionDto(createdAt, paymentId)

@@ -1,5 +1,7 @@
 package ru.quipy.common.utils
 
+import com.github.dockerjava.zerodep.shaded.org.apache.hc.core5.util.Deadline
+import com.github.dockerjava.zerodep.shaded.org.apache.hc.core5.util.Timeout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -10,8 +12,6 @@ import java.time.Duration
 import java.util.concurrent.Executors
 import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 class SlidingWindowRateLimiter(
     private val rate: Long,
@@ -39,6 +39,15 @@ class SlidingWindowRateLimiter(
         }
     }
 
+    fun tickBlocking(timeout: Long): Boolean {
+        val timeStarted = System.currentTimeMillis()
+        while (System.currentTimeMillis()-timeStarted < timeout && !tick()) {
+            Thread.sleep(2)
+        }
+        return System.currentTimeMillis()-timeStarted < timeout
+    }
+
+
     data class Measure(
         val value: Long,
         val timestamp: Long
@@ -64,6 +73,7 @@ class SlidingWindowRateLimiter(
             queue.take()
         }
     }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
+
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(SlidingWindowRateLimiter::class.java)
     }
