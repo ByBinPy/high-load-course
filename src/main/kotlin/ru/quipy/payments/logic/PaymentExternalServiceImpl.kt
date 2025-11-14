@@ -15,6 +15,7 @@ import java.time.Duration
 import java.util.*
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import kotlin.math.pow
 
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
@@ -43,7 +44,7 @@ class PaymentExternalSystemAdapterImpl(
         window = Duration.ofMillis(1_000)
     )
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient.Builder().callTimeout(Duration.ofMillis(1100)).build()
 
     override fun getAccountProperties(): PaymentAccountProperties {
         return properties
@@ -99,28 +100,58 @@ class PaymentExternalSystemAdapterImpl(
                 return
             }
 
-            val httpClient = OkHttpClient.Builder()
-                .connectTimeout(httpTimeout, TimeUnit.MILLISECONDS)
-                .readTimeout(httpTimeout, TimeUnit.MILLISECONDS)
-                .writeTimeout(httpTimeout, TimeUnit.MILLISECONDS)
-                .build()
 
-            httpClient.newCall(request).execute().use { response ->
+            var isCompletedRequest = false
+            var retryCount = 0
+            var isOk: Boolean
+            while (!isCompletedRequest && now() < deadline) {
+                isOk = false
+                if (calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis()) < 0) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, "deadline was expired")
+                    }
+                    return
+                }
+            client.newCall(request).execute().use { response ->
                 val body = try {
                     response.body?.string()?.let {
                         mapper.readValue(it, ExternalSysResponse::class.java)
-                    } ?: ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "Empty response body")
+                    } ?: ExternalSysResponse(
+                        transactionId.toString(),
+                        paymentId.toString(),
+                        false,
+                        "Empty response body"
+                    )
                 } catch (e: Exception) {
                     logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message ?: "Unknown error")
+                    ExternalSysResponse(
+                        transactionId.toString(),
+                        paymentId.toString(),
+                        false,
+                        e.message ?: "Unknown error"
+                    )
                 }
 
+                isOk = !body.result && !(response.code >= 500 || response.code == 429)
+                isCompletedRequest = if (isOk) {
+                    if (retryCount < 3) {
+                        retryCount++
+                        val backoffTime = (2.0.pow(retryCount.toDouble()) * 10 + Random().nextLong(0, 10)).toLong()
+                        Thread.sleep(backoffTime)
+                        continue
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
                 logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
 
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
                 // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                }
                 }
             }
         } catch (e: Exception) {
