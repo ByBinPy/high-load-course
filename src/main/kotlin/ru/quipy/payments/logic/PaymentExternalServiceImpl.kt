@@ -31,18 +31,16 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
+    private val callTimeout = 1100L
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val slidingWindowRateLimiter = SlidingWindowRateLimiter(
-        rate = rateLimitPerSec.toLong(),
-        window = Duration.ofMillis(1_000)
-    )
 
-    private val client = OkHttpClient.Builder().callTimeout(Duration.ofMillis(1100)).build()
+
+    private val client = OkHttpClient.Builder().callTimeout(Duration.ofMillis(callTimeout)).build()
 
     override fun getAccountProperties(): PaymentAccountProperties {
         return properties
@@ -64,57 +62,44 @@ class PaymentExternalSystemAdapterImpl(
         try {
             parallelLimiter.acquire()
 
-            val rateLimiterTimeout = calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis())
-            if (rateLimiterTimeout <= 0 || !slidingWindowRateLimiter.tickBlocking(Duration.ofMillis(rateLimiterTimeout))) {
-
-                logger.warn("[$accountName] Rate limiter timeout for payment $paymentId")
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId)
-                }
-                return
-            }
-
             val request = Request.Builder().run {
                 url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
                 post(emptyBody)
                 build()
             }
 
-            val httpTimeout = calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis())
-            if (httpTimeout <= 0) {
+            if (now() < deadline-callTimeout) {
+                client.newCall(request).execute().use { response ->
+                    val body = try {
+                        response.body?.string()?.let {
+                            mapper.readValue(it, ExternalSysResponse::class.java)
+                        } ?: ExternalSysResponse(
+                            transactionId.toString(),
+                            paymentId.toString(),
+                            false,
+                            "Empty response body"
+                        )
+                    } catch (e: Exception) {
+                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                        ExternalSysResponse(
+                            transactionId.toString(),
+                            paymentId.toString(),
+                            false,
+                            e.message ?: "Unknown error"
+                        )
+                    }
+                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+
+                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                    }
+                }
+            } else {
                 logger.warn("[$accountName] HTTP request timeout before execution for payment $paymentId")
                 paymentESService.update(paymentId) {
                     it.logProcessing(false, now(), transactionId, reason = "Request timeout before execution")
-                }
-                return
-            }
-
-
-            client.newCall(request).execute().use { response ->
-                val body = try {
-                    response.body?.string()?.let {
-                        mapper.readValue(it, ExternalSysResponse::class.java)
-                    } ?: ExternalSysResponse(
-                        transactionId.toString(),
-                        paymentId.toString(),
-                        false,
-                        "Empty response body"
-                    )
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    ExternalSysResponse(
-                        transactionId.toString(),
-                        paymentId.toString(),
-                        false,
-                        e.message ?: "Unknown error"
-                    )
-                }
-                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
             }
         } catch (e: Exception) {
@@ -133,9 +118,7 @@ class PaymentExternalSystemAdapterImpl(
                 }
             }
         } finally {
-            if (parallelLimiter.availablePermits() < parallelRequests) {
                 parallelLimiter.release()
-            }
         }
     }
 
@@ -145,8 +128,8 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
-    private fun calculateRemainingTime(deadline: Long, requestAverageProcessingTime: Long): Long {
-        return deadline - now() - (requestAverageProcessingTime * 0.01).toLong()
+    private fun calculateRemainingTime(deadline: Long): Long {
+        return deadline - now() - callTimeout
     }
 
 }

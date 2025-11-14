@@ -35,7 +35,10 @@ class OrderPayer(
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
     }
-
+    private val slidingWindowRateLimiter = SlidingWindowRateLimiter(
+        rate = 8,
+        window = Duration.ofMillis(1_000)
+    )
     private val paymentExecutor: ThreadPoolExecutor by lazy {
         ThreadPoolExecutor(
             16,
@@ -50,6 +53,10 @@ class OrderPayer(
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
+
+        if (!slidingWindowRateLimiter.tickBlocking(Duration.ofMillis(deadline-createdAt-1100))) {
+            throw TooManyRequestsException(10)
+        }
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
