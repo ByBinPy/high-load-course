@@ -14,8 +14,6 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
-import kotlin.math.pow
 
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
@@ -64,16 +62,7 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
-            val parallelLimiterTimeout = calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis())
-            if (parallelLimiterTimeout <= 0 ||
-                !parallelLimiter.tryAcquire(parallelLimiterTimeout, TimeUnit.MILLISECONDS)) {
-
-                logger.warn("[$accountName] Parallel limiter timeout for payment $paymentId")
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId)
-                }
-                return
-            }
+            parallelLimiter.acquire()
 
             val rateLimiterTimeout = calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis())
             if (rateLimiterTimeout <= 0 || !slidingWindowRateLimiter.tickBlocking(Duration.ofMillis(rateLimiterTimeout))) {
@@ -101,17 +90,6 @@ class PaymentExternalSystemAdapterImpl(
             }
 
 
-            var isCompletedRequest = false
-            var retryCount = 0
-            var isOk: Boolean
-            while (!isCompletedRequest && now() < deadline) {
-                isOk = false
-                if (calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis()) < 0) {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, "deadline was expired")
-                    }
-                    return
-                }
             client.newCall(request).execute().use { response ->
                 val body = try {
                     response.body?.string()?.let {
@@ -131,27 +109,12 @@ class PaymentExternalSystemAdapterImpl(
                         e.message ?: "Unknown error"
                     )
                 }
-
-                isOk = !body.result && !(response.code >= 500 || response.code == 429)
-                isCompletedRequest = if (isOk) {
-                    if (retryCount < 3) {
-                        retryCount++
-                        val backoffTime = (2.0.pow(retryCount.toDouble()) * 10 + Random().nextLong(0, 10)).toLong()
-                        Thread.sleep(backoffTime)
-                        continue
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
                 logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
 
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
                 // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                }
                 }
             }
         } catch (e: Exception) {
