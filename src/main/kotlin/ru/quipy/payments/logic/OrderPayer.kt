@@ -8,7 +8,6 @@ import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
-import ru.quipy.exceptions.RateLimitWasBreached
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.time.Duration
@@ -48,7 +47,7 @@ class OrderPayer {
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        if (!rateLimit.tickBlocking(deadline- System.currentTimeMillis())) {
+        if (!rateLimit.tickBlocking(deadline - System.currentTimeMillis())) {
             throw TooManyRequestsException(deadline)
         }
         paymentExecutor.submit {
