@@ -2,17 +2,20 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
+import jdk.internal.net.http.RequestPublishers
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
@@ -28,7 +31,6 @@ class PaymentExternalSystemAdapterImpl(
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
-        val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -43,7 +45,11 @@ class PaymentExternalSystemAdapterImpl(
         window = Duration.ofMillis(1_000)
     )
 
-    private val httpClient = OkHttpClient.Builder().build()
+    private val httpClient = HttpClient
+        .newBuilder()
+        .executor(Executors.newFixedThreadPool(parallelRequests))
+        .version(HttpClient.Version.HTTP_2)
+        .build()
 
     override fun getAccountProperties(): PaymentAccountProperties {
         return properties
@@ -62,9 +68,12 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        try {
             val parallelLimiterTimeout = calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis())
-            if (parallelLimiterTimeout <= 0 || !parallelLimiter.tryAcquire(parallelLimiterTimeout, TimeUnit.MILLISECONDS)) {
+        if (parallelLimiterTimeout <= 0 || !parallelLimiter.tryAcquire(
+                parallelLimiterTimeout,
+                TimeUnit.MILLISECONDS
+            )
+        ) {
 
                 logger.warn("[$accountName] Parallel limiter timeout for payment $paymentId")
                 paymentESService.update(paymentId) {
@@ -83,21 +92,37 @@ class PaymentExternalSystemAdapterImpl(
                 return
             }
 
-            val request = Request.Builder().run {
-                url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
-                post(emptyBody)
-                build()
-            }
+//            val request = HttpRequest.newBuilder().run {
+//                url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
+//                post(emptyBody)
+//                build()
+//            }
 
-            httpClient.newCall(request).execute().use { response ->
+        val request = HttpRequest.newBuilder()
+            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
+            .POST(RequestPublishers.ByteArrayPublisher(ByteArray(0)))
+            .build()
+        httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply { response ->
+            {
                 val body = try {
-                    response.body?.string()?.let {
+                    response.body().let {
                         mapper.readValue(it, ExternalSysResponse::class.java)
-                    } ?: ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "Empty response body")
+                    } ?: ExternalSysResponse(
+                        transactionId.toString(),
+                        paymentId.toString(),
+                        false,
+                        "Empty response body"
+                    )
                 } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message ?: "Unknown error")
+                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                    ExternalSysResponse(
+                        transactionId.toString(),
+                        paymentId.toString(),
+                        false,
+                        e.message ?: "Unknown error"
+                    )
                 }
+
 
                 logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
 
@@ -106,8 +131,8 @@ class PaymentExternalSystemAdapterImpl(
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
-            }
-        } catch (e: Exception) {
+                }
+        }.exceptionally { e ->
             when (e) {
                 is SocketTimeoutException -> {
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
@@ -122,10 +147,8 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 }
             }
-        } finally {
-            if (parallelLimiter.availablePermits() < parallelRequests) {
-                parallelLimiter.release()
-            }
+            parallelLimiter.release()
+            null
         }
     }
 

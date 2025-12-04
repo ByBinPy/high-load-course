@@ -40,9 +40,9 @@ class OrderPayer(
         ThreadPoolExecutor(
             accountProperties.parallelRequests,
             accountProperties.parallelRequests,
-            0L,
-            TimeUnit.MILLISECONDS,
-            ArrayBlockingQueue<Runnable>(8_000),
+            100L,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue(20_000),
             NamedThreadFactory("payment-submission-executor"),
             ThreadPoolExecutor.AbortPolicy()
         )

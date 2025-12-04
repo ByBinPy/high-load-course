@@ -53,9 +53,9 @@ class APIController(private val orderRepository: OrderRepository, private val or
 
     private val tokenBucketRateLimiter: TokenBucketRateLimiter by lazy {
         TokenBucketRateLimiter(
-            rate = 100,
-            bucketMaxCapacity = 2_000,
-            startBucket = 2_000,
+            rate = 1100,
+            bucketMaxCapacity = 4400,
+            startBucket = 4400,
             window = 1000,
             timeUnit = TimeUnit.MILLISECONDS,
         )
