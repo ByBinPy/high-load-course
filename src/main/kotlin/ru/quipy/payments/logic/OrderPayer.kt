@@ -36,33 +36,25 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
-        0,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8_000),
-        NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
-    )
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         if (!rateLimit.tickBlocking(deadline- System.currentTimeMillis())) {
             throw TooManyRequestsException(deadline)
         }
-        paymentExecutor.submit {
-            val createdEvent = paymentESService.create {
+
+        val createdEvent =  paymentESService.create {
                 it.create(
                     paymentId,
                     orderId,
                     amount
                 )
             }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
-            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-        }
+        logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+
+        paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+
         return createdAt
     }
 }

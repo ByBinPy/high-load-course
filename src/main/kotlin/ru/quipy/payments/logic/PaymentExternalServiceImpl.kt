@@ -3,11 +3,17 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.callbackFlow
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Response
 import okio.IOException
 import org.slf4j.LoggerFactory
+import org.springframework.boot.autoconfigure.integration.IntegrationProperties
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.InterruptedIOException
@@ -35,7 +41,7 @@ class PaymentExternalSystemAdapterImpl(
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
-
+    // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
@@ -78,91 +84,29 @@ class PaymentExternalSystemAdapterImpl(
 
             val timeBeforeCall = now()
             var shouldRetry = false
-            try {
-                val perCallTimeoutMs = remaining.coerceAtMost(1100)
-                val request = Request.Builder()
-                    .url(
-                        "http://$paymentProviderHostPort/external/process" +
+            val perCallTimeoutMs = remaining.coerceAtMost(1100)
+            val request = Request.Builder()
+                .url(
+                    "http://$paymentProviderHostPort/external/process" +
                             "?serviceName=$serviceName&token=$token&accountName=$accountName" +
                             "&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"
-                    )
-                    .post(emptyBody)
-                    .build()
+                )
+                .post(emptyBody)
+                .build()
 
-                val call = client.newCall(request)
-                call.timeout().timeout(perCallTimeoutMs, TimeUnit.MILLISECONDS)
-
-                call.execute().use { response ->
-                    val rawBody = response.body?.string()
-                    val parsed = try {
-                        mapper.readValue(rawBody, ExternalSysResponse::class.java)
-                    } catch (ex: Exception) {
-                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
-                    }
-
-                    shouldRetry = !parsed.result && (response.code == 429 || response.code >= 500)
-
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(parsed.result, now(), transactionId, parsed.message)
-                    }
-
-                    if (parsed.result) {
-                        return
-                    }
-                }
-            } catch (e: SocketTimeoutException) {
-                logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
-                shouldRetry = true
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "socket timeout")
-                }
-            } catch (e: InterruptedIOException) {
-                logger.warn("[$accountName] interrupted: $paymentId", e)
-                shouldRetry = true
-
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "interrupted IO")
-                }
-            } catch (e: IOException) {
-                logger.warn("[$accountName] io error: $paymentId", e)
-                shouldRetry = true
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "io exception")
-                }
-            } catch (e: Exception) {
-                logger.error("[$accountName] non-retriable error: $paymentId", e)
-                shouldRetry = false
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, e.message)
-                }
-            } finally {
-                timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
-                parallelLimiter.release()
-            }
-
-            if (!shouldRetry) {
-                return
-            }
-
-            retryCount++
-            if (retryCount >= 3) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "Max attempts reached")
-                }
-                return
-            }
-
-            val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + kotlin.random.Random.nextLong(10))
-            val capped = backoff.coerceAtMost(deadline - now() - 5)
-            if (capped <= 0) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "Deadline expired")
-                }
-                return
-            }
-            Thread.sleep(capped)
+            val call = client.newCall(request).enqueue(PaymentCallback(
+                kotlinx.coroutines.sync.Semaphore(parallelRequests),
+                accountName,
+                retryCount,
+                paymentId,
+                transactionId,
+                paymentESService,
+                client,
+                request,
+                timer,
+                deadline,
+                timeBeforeCall
+            ))
         }
     }
 

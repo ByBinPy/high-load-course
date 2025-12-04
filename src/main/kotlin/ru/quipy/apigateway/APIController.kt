@@ -17,7 +17,7 @@ class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
     @field:Qualifier("parallelLimiter")
-    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(8, Duration.ofSeconds(1), 30)
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(1100, Duration.ofSeconds(1), 4400)
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
@@ -58,7 +58,7 @@ class APIController(
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
         if (!rateLimiter.tick()) {
             throw TooManyRequestsException(deadline)
         }
