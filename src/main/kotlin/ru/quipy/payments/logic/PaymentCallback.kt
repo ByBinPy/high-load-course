@@ -19,6 +19,7 @@ import kotlin.math.pow
 
 
 class PaymentCallback(val semaphore: Semaphore, val accountName: String, val retryCount: Int, val paymentId: UUID, val transactionId: UUID, val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>, val client: OkHttpClient, val request: Request, val timer: Timer, val deadline: Long, val timeBeforeCall: Long) : Callback {
+    private val remaining: Long = 10_000L //ms
     override fun onFailure(call: Call, e: java.io.IOException) {
 
         logger.debug("fail in callback for payment: {}, retry count: {}, deadline: {}, in time: {}", paymentId, retryCount, deadline, now(),  e)
@@ -52,6 +53,7 @@ class PaymentCallback(val semaphore: Semaphore, val accountName: String, val ret
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
             }
+            semaphore.release()
             return
         }
 
@@ -61,30 +63,37 @@ class PaymentCallback(val semaphore: Semaphore, val accountName: String, val ret
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, "Deadline expired")
             }
+            semaphore.release()
             return
         }
         val nCall = client.newCall(request)
         nCall.enqueue(PaymentCallback(semaphore, accountName, retryCount + 1, paymentId, transactionId, paymentESService, client, request, timer, deadline, now()))
         timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
-        semaphore.release()
-
     }
 
     override fun onResponse(call: Call, response: Response) {
+        try {
+            logger.warn("Free space in semaphore: {}", semaphore.availablePermits)
+            logger.info(
+                "success in callback for payment: {}, retry count: {}, deadline: {}, in time: {}",
+                paymentId,
+                retryCount,
+                deadline,
+                now()
+            )
+            val rawBody = response.body?.string()
+            val parsed = try {
+                mapper.readValue(rawBody, ExternalSysResponse::class.java)
+            } catch (ex: Exception) {
+                ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
+            }
 
-        logger.debug("success in callback for payment: {}, retry count: {}, deadline: {}, in time: {}", paymentId, retryCount, deadline, now())
-
-        val rawBody = response.body?.string()
-        val parsed = try {
-            mapper.readValue(rawBody, ExternalSysResponse::class.java)
-        } catch (ex: Exception) {
-            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
-        }
-
-        paymentESService.update(paymentId) {
-            it.logProcessing(parsed.result, now(), transactionId, parsed.message)
+            paymentESService.update(paymentId) {
+                it.logProcessing(parsed.result, now(), transactionId, parsed.message)
+            }
+        } finally {
+            semaphore.release()
+            timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
         }
     }
-
-    fun now() = System.currentTimeMillis()
 }

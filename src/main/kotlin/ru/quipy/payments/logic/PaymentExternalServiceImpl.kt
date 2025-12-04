@@ -3,26 +3,16 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.callbackFlow
-import okhttp3.Call
-import okhttp3.Callback
+import kotlinx.coroutines.sync.Semaphore
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.Response
-import okio.IOException
 import org.slf4j.LoggerFactory
-import org.springframework.boot.autoconfigure.integration.IntegrationProperties
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
-import kotlin.math.pow
 
 
 // Advice: always treat time as a Duration
@@ -50,11 +40,14 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder()
-        .callTimeout(1100, TimeUnit.MILLISECONDS).build()
+        .callTimeout(30_000, TimeUnit.MILLISECONDS).build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
+
+
+        fun now() = System.currentTimeMillis()
         val transactionId = UUID.randomUUID()
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
@@ -66,7 +59,7 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         var retryCount = 0
-        while (true) {
+
             val remaining = deadline - now()
             if (remaining <= 0) {
                 paymentESService.update(paymentId) {
@@ -75,16 +68,9 @@ class PaymentExternalSystemAdapterImpl(
                 return
             }
 
-            if (!parallelLimiter.tryAcquire(remaining, TimeUnit.MILLISECONDS)) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "parallel limiter timeout")
-                }
-                return
-            }
-
             val timeBeforeCall = now()
-            var shouldRetry = false
-            val perCallTimeoutMs = remaining.coerceAtMost(1100)
+            remaining.coerceAtMost(30_000L)
+            tryAcquire(now(), remaining)
             val request = Request.Builder()
                 .url(
                     "http://$paymentProviderHostPort/external/process" +
@@ -94,8 +80,8 @@ class PaymentExternalSystemAdapterImpl(
                 .post(emptyBody)
                 .build()
 
-            val call = client.newCall(request).enqueue(PaymentCallback(
-                kotlinx.coroutines.sync.Semaphore(parallelRequests),
+            client.newCall(request).enqueue(PaymentCallback(
+                parallelLimiter,
                 accountName,
                 retryCount,
                 paymentId,
@@ -108,15 +94,18 @@ class PaymentExternalSystemAdapterImpl(
                 timeBeforeCall
             ))
         }
-    }
 
     override fun price() = properties.price
 
     override fun isEnabled() = properties.enabled
 
     override fun name() = properties.accountName
-    fun timeToDead(deadline: Long): Long {
-        return deadline - now()
+
+    fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
+        while (!parallelLimiter.tryAcquire() && now()-startedAt < remaining) { }
+        return parallelLimiter.tryAcquire()
     }
+
 }
-public fun now() = System.currentTimeMillis()
+
+fun now() = System.currentTimeMillis()
