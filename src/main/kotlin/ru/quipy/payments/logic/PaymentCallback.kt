@@ -53,6 +53,7 @@ class PaymentCallback(val startedRequestsCounter: Counter, val semaphore: Semaph
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
             }
+            startedRequestsCounter.increment()
             semaphore.release()
             return
         }
@@ -63,6 +64,7 @@ class PaymentCallback(val startedRequestsCounter: Counter, val semaphore: Semaph
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, "Deadline expired")
             }
+            startedRequestsCounter.increment()
             semaphore.release()
             return
         }
