@@ -4,9 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.sync.Semaphore
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
+import okhttp3.*
 import org.slf4j.LoggerFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -24,7 +22,6 @@ class PaymentExternalSystemAdapterImpl(
     meterRegistry: MeterRegistry,
     private val parallelLimiter: Semaphore
 ) : PaymentExternalSystemAdapter {
-
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
@@ -32,6 +29,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
+    private val startedRequests = meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
@@ -39,15 +37,20 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
+    private val dispatcher = Dispatcher().apply {
+        maxRequestsPerHost = parallelRequests
+        maxRequests = parallelRequests * 2
+    }
+
     private val client = OkHttpClient.Builder()
-        .callTimeout(30_000, TimeUnit.MILLISECONDS).build()
+        .dispatcher(dispatcher)
+        .connectionPool(ConnectionPool(parallelRequests, 6, TimeUnit.MINUTES))
+        .callTimeout(30_000, TimeUnit.MILLISECONDS)
+        .build()
 
-    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+
+    override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
-
-
-
-        fun now() = System.currentTimeMillis()
         val transactionId = UUID.randomUUID()
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
@@ -57,9 +60,6 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-
-        var retryCount = 0
-
             val remaining = deadline - now()
             if (remaining <= 0) {
                 paymentESService.update(paymentId) {
@@ -80,10 +80,12 @@ class PaymentExternalSystemAdapterImpl(
                 .post(emptyBody)
                 .build()
 
-            client.newCall(request).enqueue(PaymentCallback(
+        logger.info("Client connections {}. Semaphore was locked: {} ", client.connectionPool.connectionCount(), parallelRequests-parallelLimiter.availablePermits)
+        client.newCall(request).enqueue(PaymentCallback(
+                startedRequests,
                 parallelLimiter,
                 accountName,
-                retryCount,
+                0,
                 paymentId,
                 transactionId,
                 paymentESService,
@@ -106,6 +108,6 @@ class PaymentExternalSystemAdapterImpl(
         return parallelLimiter.tryAcquire()
     }
 
-}
 
+}
 fun now() = System.currentTimeMillis()

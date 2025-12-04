@@ -1,6 +1,7 @@
 package ru.quipy.payments.logic
 
 import io.micrometer.core.instrument.Timer
+import io.micrometer.core.instrument.Counter
 import kotlinx.coroutines.sync.Semaphore
 import okhttp3.Call
 import okhttp3.Callback
@@ -18,8 +19,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
 
-class PaymentCallback(val semaphore: Semaphore, val accountName: String, val retryCount: Int, val paymentId: UUID, val transactionId: UUID, val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>, val client: OkHttpClient, val request: Request, val timer: Timer, val deadline: Long, val timeBeforeCall: Long) : Callback {
-    private val remaining: Long = 10_000L //ms
+class PaymentCallback(val startedRequestsCounter: Counter, val semaphore: Semaphore, val accountName: String, val retryCount: Int, val paymentId: UUID, val transactionId: UUID, val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>, val client: OkHttpClient, val request: Request, val timer: Timer, val deadline: Long, val timeBeforeCall: Long) : Callback {
     override fun onFailure(call: Call, e: java.io.IOException) {
 
         logger.debug("fail in callback for payment: {}, retry count: {}, deadline: {}, in time: {}", paymentId, retryCount, deadline, now(),  e)
@@ -67,11 +67,12 @@ class PaymentCallback(val semaphore: Semaphore, val accountName: String, val ret
             return
         }
         val nCall = client.newCall(request)
-        nCall.enqueue(PaymentCallback(semaphore, accountName, retryCount + 1, paymentId, transactionId, paymentESService, client, request, timer, deadline, now()))
+        nCall.enqueue(PaymentCallback(startedRequestsCounter, semaphore, accountName, retryCount + 1, paymentId, transactionId, paymentESService, client, request, timer, deadline, now()))
         timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
     }
 
     override fun onResponse(call: Call, response: Response) {
+        startedRequestsCounter.increment()
         try {
             logger.warn("Free space in semaphore: {}", semaphore.availablePermits)
             logger.info(

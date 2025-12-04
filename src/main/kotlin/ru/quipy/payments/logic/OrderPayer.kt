@@ -1,5 +1,6 @@
 package ru.quipy.payments.logic
 
+import io.micrometer.core.instrument.MeterRegistry
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -18,17 +19,19 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 @Service
-class OrderPayer {
+class OrderPayer(meterRegistry: MeterRegistry) {
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
     }
     private val rateLimit: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
-            rate = 8,
+            rate = 1100,
             window = Duration.ofMillis(1000),
         )
     }
+    private val plannedRequests = meterRegistry.counter("payment.processing.planned", "accountName", "acc-12")
+
 
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
@@ -39,11 +42,12 @@ class OrderPayer {
 
     suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
+        plannedRequests.increment()
         if (!rateLimit.tickBlocking(deadline- System.currentTimeMillis())) {
             throw TooManyRequestsException(deadline)
         }
 
-        val createdEvent =  paymentESService.create {
+        val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,
                     orderId,
@@ -51,7 +55,7 @@ class OrderPayer {
                 )
             }
 
-        logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+        logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
 
         paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
 
