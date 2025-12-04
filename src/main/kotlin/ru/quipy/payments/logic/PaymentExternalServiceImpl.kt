@@ -28,6 +28,8 @@ class PaymentExternalSystemAdapterImpl(
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
+
+    private val remaining = 50_000L
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests = meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
@@ -45,7 +47,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder()
         .dispatcher(dispatcher)
         .connectionPool(ConnectionPool(parallelRequests, 6, TimeUnit.MINUTES))
-        .callTimeout(30_000, TimeUnit.MILLISECONDS)
+        .callTimeout(remaining, TimeUnit.MILLISECONDS)
         .build()
 
 
@@ -69,7 +71,7 @@ class PaymentExternalSystemAdapterImpl(
             }
 
             val timeBeforeCall = now()
-            remaining.coerceAtMost(30_000L)
+            remaining.coerceAtMost(remaining)
             tryAcquire(now(), remaining)
             val request = Request.Builder()
                 .url(
