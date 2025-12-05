@@ -4,9 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.sync.Semaphore
-import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
+import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
@@ -31,8 +32,6 @@ class PaymentExternalSystemAdapterImpl(
 ) : PaymentExternalSystemAdapter {
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-
-        val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -45,6 +44,13 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
+
+    private val rateLimit: SlidingWindowRateLimiter by lazy {
+        SlidingWindowRateLimiter(
+            rate = rateLimitPerSec.toLong(),
+            window = Duration.ofMillis(1000),
+        )
+    }
 
     private val httpClient = HttpClient
         .newBuilder()
@@ -75,13 +81,16 @@ class PaymentExternalSystemAdapterImpl(
         val timeBeforeCall = now()
         remaining.coerceAtMost(this.remaining)
         tryAcquire(now(), remaining)
+        if (!rateLimit.tickBlocking(deadline- now())) {
+            throw TooManyRequestsException(deadline)
+        }
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             .timeout(Duration.ofMillis(30_000))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-        val retryCount = 0L;
+        val retryCount = 0L
 
         completeAction(retryCount, request, paymentId, transactionId, timeBeforeCall)
     }
@@ -93,8 +102,12 @@ class PaymentExternalSystemAdapterImpl(
     override fun name() = properties.accountName
 
     fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
-        while (!parallelLimiter.tryAcquire() && now()-startedAt < remaining) { }
-        return parallelLimiter.tryAcquire()
+        var isAcquired = parallelLimiter.tryAcquire()
+        while (!isAcquired && now()-startedAt < remaining) {
+            isAcquired = parallelLimiter.tryAcquire()
+        }
+
+        return isAcquired
     }
 
     fun completeAction(retryCount: Long, request: HttpRequest, paymentId: UUID, transactionId: UUID, timeBeforeCall: Long) {
