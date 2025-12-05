@@ -62,7 +62,7 @@ class APIController(private val orderRepository: OrderRepository, private val or
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
 
         if (!tokenBucketRateLimiter.tick()) {
             throw TooManyRequestsException(retryAfterMillisecond = 30)

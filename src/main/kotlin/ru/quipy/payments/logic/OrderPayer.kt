@@ -6,16 +6,10 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
-import ru.quipy.common.utils.NamedThreadFactory
-import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
-import ru.quipy.exceptions.DeadlineExceededException
-import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
-import ru.quipy.payments.dto.Transaction
-import java.time.Duration
 import java.util.*
-import java.util.concurrent.*
+import java.util.concurrent.Semaphore
 
 @Service
 class OrderPayer(
@@ -36,21 +30,9 @@ class OrderPayer(
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
     }
 
-    private val paymentExecutor: ThreadPoolExecutor by lazy {
-        ThreadPoolExecutor(
-            accountProperties.parallelRequests,
-            accountProperties.parallelRequests,
-            100L,
-            TimeUnit.SECONDS,
-            ArrayBlockingQueue(20_000),
-            NamedThreadFactory("payment-submission-executor"),
-            ThreadPoolExecutor.AbortPolicy()
-        )
-    }
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+     suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,
@@ -59,10 +41,9 @@ class OrderPayer(
                 )
             }
 
-            logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
+        logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
+        paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
 
-            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-        }
 
         return createdAt
     }

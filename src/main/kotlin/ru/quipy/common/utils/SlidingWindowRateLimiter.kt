@@ -31,7 +31,7 @@ class SlidingWindowRateLimiter(
         }
     }
 
-    fun tickBlocking() {
+     fun tickBlocking() {
         while (!tick()) {
             Thread.sleep(10)
         }
