@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.web.bind.annotation.*
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.RateLimiter
+import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.time.Duration
@@ -16,13 +17,13 @@ class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
     @field:Qualifier("parallelLimiter")
-    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(1100, Duration.ofSeconds(1), 4400)
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(1100, Duration.ofSeconds(1), 3300)
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
     @PostMapping("/users")
-    fun createUser(@RequestBody req: CreateUserRequest): User {
+    suspend fun createUser(@RequestBody req: CreateUserRequest): User {
         return User(UUID.randomUUID(), req.name)
     }
 
@@ -31,7 +32,7 @@ class APIController(
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -58,6 +59,9 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+        if (!rateLimiter.tick()) {
+            throw TooManyRequestsException(deadline)
+        }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))

@@ -2,7 +2,9 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import com.github.dockerjava.api.model.Link
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -19,6 +21,7 @@ import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.math.pow
 
 
 // Advice: always treat time as a Duration
@@ -92,7 +95,7 @@ class PaymentExternalSystemAdapterImpl(
 
         val retryCount = 0L
 
-        completeAction(retryCount, request, paymentId, transactionId, timeBeforeCall)
+        completeAction(retryCount, request, paymentId, transactionId, timeBeforeCall, deadline)
     }
 
     override fun price() = properties.price
@@ -110,7 +113,7 @@ class PaymentExternalSystemAdapterImpl(
         return isAcquired
     }
 
-    fun completeAction(retryCount: Long, request: HttpRequest, paymentId: UUID, transactionId: UUID, timeBeforeCall: Long) {
+    fun completeAction(retryCount: Long, request: HttpRequest, paymentId: UUID, transactionId: UUID, timeBeforeCall: Long, deadline: Long) {
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                     if (throwable != null) {
@@ -148,7 +151,24 @@ class PaymentExternalSystemAdapterImpl(
                             startedRequests.increment()
                             parallelLimiter.release()
                         } else {
-                            completeAction(retryCount + 1, request, paymentId, transactionId, timeBeforeCall)
+                            val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + kotlin.random.Random.nextLong(10))
+                            val capped = backoff.coerceAtMost(deadline - now() - 5)
+                            if (capped <= 0) {
+                                paymentESService.update(paymentId) {
+                                    it.logProcessing(false, now(), transactionId, "Deadline expired")
+                                }
+                                startedRequests.increment()
+                            } else {
+                                Thread.sleep(backoff)
+                                completeAction(
+                                    retryCount + 1,
+                                    request,
+                                    paymentId,
+                                    transactionId,
+                                    timeBeforeCall,
+                                    deadline
+                                )
+                            }
                         }
                     } else {
                         startedRequests.increment()
