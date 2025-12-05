@@ -82,7 +82,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         val rateLimiterTimeout = calculateRemainingTime(deadline, requestAverageProcessingTime.toMillis())
-        if (rateLimiterTimeout <= 0 || !slidingWindowRateLimiter.tickBlocking(Duration.ofMillis(rateLimiterTimeout))) {
+        if (rateLimiterTimeout <= 0 || !slidingWindowRateLimiter.tick()) {
 
             logger.warn("[$accountName] Rate limiter timeout for payment $paymentId")
             paymentESService.update(paymentId) {
@@ -168,5 +168,4 @@ class PaymentExternalSystemAdapterImpl(
 
 }
 
-
-public fun now() = System.currentTimeMillis()
+fun now() = System.currentTimeMillis()
