@@ -13,16 +13,17 @@ import java.util.concurrent.atomic.AtomicInteger
 class TokenBucketRateLimiter(
     private val rate: Int,
     private val bucketMaxCapacity: Int,
+    private val startBucket: Int,
     private val window: Long,
     private val timeUnit: TimeUnit = TimeUnit.MINUTES,
-): RateLimiter {
+) : RateLimiter {
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(TokenBucketRateLimiter::class.java)
     }
 
     private val rateLimiterScope = CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
-    private var bucket: AtomicInteger = AtomicInteger(0)
+    private var bucket: AtomicInteger = AtomicInteger(startBucket)
     private var start = System.currentTimeMillis()
     private var nextExpectedWakeUp = start + timeUnit.toMillis(window)
 

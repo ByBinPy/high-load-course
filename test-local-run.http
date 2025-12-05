@@ -1,15 +1,36 @@
-### Run test locally
+### Test 8
 POST http://localhost:1234/test/run
 Content-Type: application/json
 
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "ratePerSecond": 1,
-  "testCount": 100,
-  "processingTimeMillis": 80000
+  "ratePerSecond": 100,
+  "testCount": 5000,
+  "processingTimeMillis": 20000
 }
 
 ### Stop running test to save time and resources
 # @timeout 120
 POST http://localhost:1234/test/stop/{{serviceName}}
+
+
+
+#    Аккаунт: "acc-9"
+#
+#    Тест:
+#    {
+#      "ratePerSecond": 100,
+#      "testCount": 5000,
+#      "processingTimeMillis": 20000
+#    }
+
+#    PaymentAccountProperties(
+#        serviceName=cas-m3404-05,
+#        accountName=acc-9,
+#        parallelRequests=50,
+#        rateLimitPerSec=120,
+#        price=30,
+#        averageProcessingTime=PT0.5S,
+#        enabled=true
+#    )

@@ -4,6 +4,19 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+### grafana ###
+/grafana/
+
+### prometheus ###
+
+/prometheus/
+
+### confidential data ###
+
+http-client.env.json
+
+
+
 ### STS ###
 .apt_generated
 .classpath
@@ -18,7 +31,6 @@ target/
 *.iws
 *.iml
 *.ipr
-./http-client.env.json
 
 ### NetBeans ###
 /nbproject/private/

@@ -1,5 +1,6 @@
 package ru.quipy.payments.subscribers
 
+import jakarta.annotation.PostConstruct
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -12,7 +13,6 @@ import ru.quipy.streams.annotation.RetryFailedStrategy
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import jakarta.annotation.PostConstruct
 
 @Service
 class PaymentTransactionsSubscriber {

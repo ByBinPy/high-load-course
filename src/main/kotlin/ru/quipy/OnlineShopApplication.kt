@@ -13,7 +13,7 @@ class OnlineShopApplication {
     val log: Logger = LoggerFactory.getLogger(OnlineShopApplication::class.java)
 
     companion object {
-        val appExecutor = Executors.newFixedThreadPool(64, NamedThreadFactory("main-app-executor"))
+        val appExecutor = Executors.newFixedThreadPool(110, NamedThreadFactory("main-app-executor"))
     }
 }
 

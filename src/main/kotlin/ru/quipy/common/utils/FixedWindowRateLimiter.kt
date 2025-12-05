@@ -19,7 +19,7 @@ class FixedWindowRateLimiter(
     private val rate: Int,
     private val window: Long,
     private val timeUnit: TimeUnit = TimeUnit.MINUTES,
-): RateLimiter {
+) : RateLimiter {
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(FixedWindowRateLimiter::class.java)
         private val counter = AtomicInteger(0)
@@ -59,7 +59,7 @@ class SlowStartRateLimiter(
     private val targetRate: Int,
     private val timeUnit: TimeUnit = TimeUnit.MINUTES,
     private val slowStartOn: Boolean = true,
-): RateLimiter {
+) : RateLimiter {
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(SlowStartRateLimiter::class.java)
         private val counter = AtomicInteger(0)
@@ -108,7 +108,7 @@ class CountingRateLimiter(
     private val rate: Int,
     private val window: Long,
     private val timeUnit: TimeUnit = TimeUnit.SECONDS
-): RateLimiter {
+) : RateLimiter {
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(CountingRateLimiter::class.java)
     }
@@ -137,7 +137,11 @@ class CountingRateLimiter(
     )
 }
 
-fun makeRateLimiter(accountName: String, rate: Int, timeUnit: TimeUnit = TimeUnit.SECONDS): io.github.resilience4j.ratelimiter.RateLimiter {
+fun makeRateLimiter(
+    accountName: String,
+    rate: Int,
+    timeUnit: TimeUnit = TimeUnit.SECONDS
+): io.github.resilience4j.ratelimiter.RateLimiter {
     val config = RateLimiterConfig.custom()
         .limitRefreshPeriod(if (timeUnit == TimeUnit.SECONDS) Duration.ofSeconds(1) else Duration.ofMinutes(1))
         .limitForPeriod(rate)
