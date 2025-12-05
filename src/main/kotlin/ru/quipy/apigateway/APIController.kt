@@ -17,13 +17,13 @@ class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
     @field:Qualifier("parallelLimiter")
-    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(8, Duration.ofSeconds(1), 30)
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(1100, Duration.ofSeconds(1), 3300)
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
     @PostMapping("/users")
-    fun createUser(@RequestBody req: CreateUserRequest): User {
+    suspend fun createUser(@RequestBody req: CreateUserRequest): User {
         return User(UUID.randomUUID(), req.name)
     }
 
@@ -32,7 +32,7 @@ class APIController(
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -58,7 +58,7 @@ class APIController(
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
         if (!rateLimiter.tick()) {
             throw TooManyRequestsException(deadline)
         }
