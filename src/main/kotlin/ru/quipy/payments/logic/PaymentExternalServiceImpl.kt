@@ -39,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     meterRegistry: MeterRegistry,
     private val parallelLimiter: Semaphore,
     private val ioDispatcher: CoroutineDispatcher = Executors.newFixedThreadPool(
-        Runtime.getRuntime().availableProcessors() * 4,
+        Runtime.getRuntime().availableProcessors() * 8,
         NamedThreadFactory("payment-io-")
     ).asCoroutineDispatcher()
 ) : PaymentExternalSystemAdapter {
