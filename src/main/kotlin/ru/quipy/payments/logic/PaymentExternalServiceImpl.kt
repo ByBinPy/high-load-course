@@ -59,6 +59,10 @@ class PaymentExternalSystemAdapterImpl(
         .version(HttpClient.Version.HTTP_2)
         .build()
 
+    private val retryScheduler = Executors.newScheduledThreadPool(
+        Runtime.getRuntime().availableProcessors()
+    )
+
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
@@ -171,23 +175,34 @@ class PaymentExternalSystemAdapterImpl(
                                 startedRequests.increment()
                                 parallelLimiter.release()
                             } else {
-                                Thread.sleep(capped)
+                                retryScheduler.schedule({
+                                    val remainingTime = deadline - now()
 
-                                val newRequestTimeout = (deadline - now()).coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
-                                val newRequest = HttpRequest.newBuilder()
-                                    .uri(request.uri())
-                                    .timeout(Duration.ofMillis(newRequestTimeout))
-                                    .POST(HttpRequest.BodyPublishers.noBody())
-                                    .build()
+                                    if (remainingTime < requestAverageProcessingTime.toMillis()) {
+                                        paymentESService.update(paymentId) {
+                                            it.logProcessing(false, now(), transactionId, "Not enough time for retry")
+                                        }
+                                        startedRequests.increment()
+                                        parallelLimiter.release()
+                                        return@schedule
+                                    }
 
-                                completeAction(
-                                    retryCount + 1,
-                                    newRequest,
-                                    paymentId,
-                                    transactionId,
-                                    timeBeforeCall,
-                                    deadline
-                                )
+                                    val newRequestTimeout = remainingTime.coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
+                                    val newRequest = HttpRequest.newBuilder()
+                                        .uri(request.uri())
+                                        .timeout(Duration.ofMillis(newRequestTimeout))
+                                        .POST(HttpRequest.BodyPublishers.noBody())
+                                        .build()
+
+                                    completeAction(
+                                        retryCount + 1,
+                                        newRequest,
+                                        paymentId,
+                                        transactionId,
+                                        timeBeforeCall,
+                                        deadline
+                                    )
+                                }, capped, TimeUnit.MILLISECONDS)
                             }
                         }
                     } else {
