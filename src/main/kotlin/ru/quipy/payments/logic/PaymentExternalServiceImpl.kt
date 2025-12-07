@@ -3,12 +3,7 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.NamedThreadFactory
@@ -25,12 +20,11 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 import kotlin.random.Random
 
-
-// Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
@@ -38,15 +32,19 @@ class PaymentExternalSystemAdapterImpl(
     private val token: String,
     meterRegistry: MeterRegistry,
     private val parallelLimiter: Semaphore,
-    private val ioDispatcher: CoroutineDispatcher = Executors.newFixedThreadPool(
-        Runtime.getRuntime().availableProcessors() * 2,
-        NamedThreadFactory("payment-io-")
-    ).asCoroutineDispatcher()
-) : PaymentExternalSystemAdapter {
+) : PaymentExternalSystemAdapter, AutoCloseable {
+
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
         val mapper = ObjectMapper().registerKotlinModule()
     }
+
+    private val sharedScheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(
+        Runtime.getRuntime().availableProcessors() * 2,
+        NamedThreadFactory("payment-shared-${properties.accountName}-")
+    )
+
+    private val ioDispatcher: CoroutineDispatcher = sharedScheduler.asCoroutineDispatcher()
 
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         logger.error("[$accountName] Unhandled exception in payment adapter coroutine", throwable)
@@ -54,8 +52,6 @@ class PaymentExternalSystemAdapterImpl(
 
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher + exceptionHandler)
 
-
-    // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests =
         meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val timer =
@@ -75,20 +71,14 @@ class PaymentExternalSystemAdapterImpl(
 
     private val httpClient = HttpClient
         .newBuilder()
-        .executor(Executors.newFixedThreadPool(parallelRequests))
+        .executor(sharedScheduler)
         .version(HttpClient.Version.HTTP_2)
         .build()
-
-    private val retryScheduler = Executors.newScheduledThreadPool(
-        Runtime.getRuntime().availableProcessors()
-    )
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
 
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         scope.launch {
             try {
                 paymentESService.update(paymentId) {
@@ -111,9 +101,12 @@ class PaymentExternalSystemAdapterImpl(
         val minRequiredTime = requestAverageProcessingTime.toMillis() * 2
         if (remaining < minRequiredTime) {
             logger.warn("[$accountName] Not enough time for payment $paymentId: ${remaining}ms remaining, need ${minRequiredTime}ms")
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, "not enough time")
+            runBlocking {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, "not enough time")
+                }
             }
+
             val retryAfterMs = minRequiredTime - remaining + Random.nextLong(100)
             throw TooManyRequestsException(retryAfterMs)
         }
@@ -185,74 +178,79 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
-                scope.launch {
-                    try {
-                        if (throwable != null) {
-                            val e = throwable.cause
-                            when (throwable.cause) {
-                                is SocketTimeoutException -> {
-                                    logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
-                                }
-
-                                is InterruptedIOException -> {
-                                    logger.warn("[$accountName] interrupted: $paymentId", e)
-                                }
-
-                                else -> {
-                                    logger.warn("[$accountName] io error: $paymentId", e)
-                                }
+                try {
+                    if (throwable != null) {
+                        val e = throwable.cause
+                        when (throwable.cause) {
+                            is SocketTimeoutException -> {
+                                logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
                             }
 
-                            if (retryCount + 1 >= 3) {
+                            is InterruptedIOException -> {
+                                logger.warn("[$accountName] interrupted: $paymentId", e)
+                            }
+
+                            else -> {
+                                logger.warn("[$accountName] io error: $paymentId", e)
+                            }
+                        }
+
+                        if (retryCount + 1 >= 3) {
+                            runBlocking {
                                 paymentESService.update(paymentId) {
                                     it.logProcessing(false, now(), transactionId, "Max attempts reached")
                                 }
-                            } else {
-                                val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + Random.nextLong(10))
-                                val capped = backoff.coerceAtMost(deadline - now() - 5)
-                                if (capped <= 0) {
+                            }
+                        } else {
+                            val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + Random.nextLong(10))
+                            val capped = backoff.coerceAtMost(deadline - now() - 5)
+                            if (capped <= 0) {
+                                runBlocking {
                                     paymentESService.update(paymentId) {
                                         it.logProcessing(false, now(), transactionId, "Deadline expired")
                                     }
-                                } else {
-                                    scheduleRetry(
-                                        retryCount,
-                                        request,
-                                        paymentId,
-                                        transactionId,
-                                        timeBeforeCall,
-                                        deadline,
-                                        capped
-                                    )
-                                    return@launch
                                 }
+                            } else {
+                                scheduleRetry(
+                                    retryCount,
+                                    request,
+                                    paymentId,
+                                    transactionId,
+                                    timeBeforeCall,
+                                    deadline,
+                                    capped
+                                )
+                                return@whenComplete
                             }
-                        } else {
-                            logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits)
-                            logger.info(
-                                "success in callback for payment: {}, retry count: {}, in time: {}",
-                                paymentId,
-                                retryCount,
-                                now()
-                            )
-                            val rawBody = response.body()
-                            val parsed = try {
-                                mapper.readValue(rawBody, ExternalSysResponse::class.java)
-                            } catch (ex: Exception) {
-                                ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
-                            }
+                        }
+                    } else {
+                        logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits)
+                        logger.info(
+                            "success in callback for payment: {}, retry count: {}, in time: {}",
+                            paymentId,
+                            retryCount,
+                            now()
+                        )
+                        val rawBody = response.body()
+                        val parsed = try {
+                            mapper.readValue(rawBody, ExternalSysResponse::class.java)
+                        } catch (ex: Exception) {
+                            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
+                        }
 
+                        runBlocking {
                             paymentESService.update(paymentId) {
                                 it.logProcessing(parsed.result, now(), transactionId, parsed.message)
                             }
-                            timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                         }
-                    } catch (e: Exception) {
-                        logger.error("[$accountName] Error processing payment $paymentId", e)
-                    } finally {
-                        startedRequests.increment()
-                        parallelLimiter.release()
+
+                        timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                     }
+                } catch (e: Exception) {
+                    logger.error("[$accountName] Error processing payment $paymentId", e)
+                } finally {
+                    startedRequests.increment()
+                    parallelLimiter.release()
                 }
             }
     }
@@ -261,10 +259,10 @@ class PaymentExternalSystemAdapterImpl(
         retryCount: Long, request: HttpRequest, paymentId: UUID,
         transactionId: UUID, timeBeforeCall: Long, deadline: Long, delay: Long
     ) {
-        retryScheduler.schedule({
+        sharedScheduler.schedule({
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
-                scope.launch {
+                runBlocking {
                     try {
                         paymentESService.update(paymentId) {
                             it.logProcessing(false, now(), transactionId, "Not enough time for retry")
@@ -288,6 +286,18 @@ class PaymentExternalSystemAdapterImpl(
 
             completeAction(retryCount + 1, newRequest, paymentId, transactionId, timeBeforeCall, deadline)
         }, delay, TimeUnit.MILLISECONDS)
+    }
+
+    override fun close() {
+        sharedScheduler.shutdown()
+        try {
+            if (!sharedScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                sharedScheduler.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            sharedScheduler.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
     }
 }
 
