@@ -72,7 +72,7 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         val remaining = deadline - now()
-        val minRequiredTime = requestAverageProcessingTime.toMillis() + 5000
+        val minRequiredTime = requestAverageProcessingTime.toMillis() * 2
         if (remaining < minRequiredTime) {
             logger.warn("[$accountName] Not enough time for payment $paymentId: ${remaining}ms remaining, need ${minRequiredTime}ms")
             paymentESService.update(paymentId) {
