@@ -161,9 +161,17 @@ class PaymentExternalSystemAdapterImpl(
                                 parallelLimiter.release()
                             } else {
                                 Thread.sleep(capped)
+
+                                val newRequestTimeout = (deadline - now()).coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
+                                val newRequest = HttpRequest.newBuilder()
+                                    .uri(request.uri())
+                                    .timeout(Duration.ofMillis(newRequestTimeout))
+                                    .POST(HttpRequest.BodyPublishers.noBody())
+                                    .build()
+
                                 completeAction(
                                     retryCount + 1,
-                                    request,
+                                    newRequest,
                                     paymentId,
                                     transactionId,
                                     timeBeforeCall,
