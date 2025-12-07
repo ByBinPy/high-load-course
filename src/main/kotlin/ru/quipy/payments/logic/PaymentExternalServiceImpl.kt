@@ -37,7 +37,6 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
-    private val maxRequestTimeout = 20_000L
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests = meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
@@ -120,6 +119,7 @@ class PaymentExternalSystemAdapterImpl(
         var isAcquired = parallelLimiter.tryAcquire()
         while (!isAcquired && now() - startedAt < remaining) {
             isAcquired = parallelLimiter.tryAcquire()
+            Thread.sleep(1)
         }
 
         return isAcquired
@@ -133,26 +133,14 @@ class PaymentExternalSystemAdapterImpl(
                         when (throwable.cause) {
                             is SocketTimeoutException -> {
                                 logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(false, now(), transactionId, "socket timeout")
-                                }
                             }
 
                             is InterruptedIOException -> {
                                 logger.warn("[$accountName] interrupted: $paymentId", e)
-
-                                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(false, now(), transactionId, "interrupted IO")
-                                }
                             }
 
                             else -> {
                                 logger.warn("[$accountName] io error: $paymentId", e)
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(false, now(), transactionId, "io exception")
-                                }
                             }
                         }
 
