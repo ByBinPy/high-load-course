@@ -23,7 +23,7 @@ class APIController(
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
     @PostMapping("/users")
-    suspend fun createUser(@RequestBody req: CreateUserRequest): User {
+    fun createUser(@RequestBody req: CreateUserRequest): User {
         return User(UUID.randomUUID(), req.name)
     }
 
@@ -32,7 +32,7 @@ class APIController(
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -58,7 +58,7 @@ class APIController(
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
         if (!rateLimiter.tick()) {
             throw TooManyRequestsException(deadline)
         }

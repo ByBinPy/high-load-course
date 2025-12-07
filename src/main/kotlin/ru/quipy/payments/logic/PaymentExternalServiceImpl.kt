@@ -2,9 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import com.github.dockerjava.api.model.Link
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -61,8 +59,7 @@ class PaymentExternalSystemAdapterImpl(
         .version(HttpClient.Version.HTTP_2)
         .build()
 
-
-    override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
 
@@ -84,7 +81,7 @@ class PaymentExternalSystemAdapterImpl(
         val timeBeforeCall = now()
         remaining.coerceAtMost(this.remaining)
         tryAcquire(now(), remaining)
-        if (!rateLimit.tickBlocking(deadline- now())) {
+        if (!rateLimit.tickBlockingWithTimeout(deadline - now())) {
             throw TooManyRequestsException(deadline)
         }
         val request = HttpRequest.newBuilder()
@@ -106,7 +103,7 @@ class PaymentExternalSystemAdapterImpl(
 
     fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
         var isAcquired = parallelLimiter.tryAcquire()
-        while (!isAcquired && now()-startedAt < remaining) {
+        while (!isAcquired && now() - startedAt < remaining) {
             isAcquired = parallelLimiter.tryAcquire()
         }
 
@@ -159,7 +156,7 @@ class PaymentExternalSystemAdapterImpl(
                                 }
                                 startedRequests.increment()
                             } else {
-                                Thread.sleep(backoff)
+                                Thread.sleep(capped)
                                 completeAction(
                                     retryCount + 1,
                                     request,
