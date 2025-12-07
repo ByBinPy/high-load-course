@@ -48,7 +48,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val rateLimit: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
-            rate = (rateLimitPerSec * 0.95).toLong(),
+            rate = (rateLimitPerSec * 0.9).toLong(),
             window = Duration.ofMillis(1000),
         )
     }
@@ -70,12 +70,16 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
+
         val remaining = deadline - now()
-        if (remaining <= 0) {
+        val minRequiredTime = requestAverageProcessingTime.toMillis() + 5000
+        if (remaining < minRequiredTime) {
+            logger.warn("[$accountName] Not enough time for payment $paymentId: ${remaining}ms remaining, need ${minRequiredTime}ms")
             paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, "deadline expired")
+                it.logProcessing(false, now(), transactionId, "not enough time")
             }
-            return
+            val retryAfterMs = minRequiredTime - remaining + Random.nextLong(100)
+            throw TooManyRequestsException(retryAfterMs)
         }
 
         val timeBeforeCall = now()
@@ -97,6 +101,13 @@ class PaymentExternalSystemAdapterImpl(
             deadline - now(),
             requestAverageProcessingTime.toMillis() * 2
         ).coerceAtLeast(100)
+
+        if (requestTimeout < requestAverageProcessingTime.toMillis()) {
+            logger.warn("[$accountName] Timeout too short for payment $paymentId: ${requestTimeout}ms")
+            parallelLimiter.release()
+            val retryAfterMs = requestAverageProcessingTime.toMillis() - requestTimeout + Random.nextLong(100)
+            throw TooManyRequestsException(retryAfterMs)
+        }
 
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
