@@ -39,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     meterRegistry: MeterRegistry,
     private val parallelLimiter: Semaphore,
     private val ioDispatcher: CoroutineDispatcher = Executors.newFixedThreadPool(
-        (properties.parallelRequests / 20).coerceIn(100, 1000),
+        Runtime.getRuntime().availableProcessors() * 2,
         NamedThreadFactory("payment-io-")
     ).asCoroutineDispatcher()
 ) : PaymentExternalSystemAdapter {
@@ -47,8 +47,6 @@ class PaymentExternalSystemAdapterImpl(
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
         val mapper = ObjectMapper().registerKotlinModule()
     }
-
-    private val coroutineLimiter = Semaphore(5000)
 
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         logger.error("[$accountName] Unhandled exception in payment adapter coroutine", throwable)
@@ -89,10 +87,6 @@ class PaymentExternalSystemAdapterImpl(
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
 
-        if (!coroutineLimiter.tryAcquire()) {
-            // Слишком много активных корутин - отклонить
-            throw TooManyRequestsException(100L)
-        }
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         scope.launch {
