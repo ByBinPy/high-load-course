@@ -36,8 +36,8 @@ class PaymentExternalSystemAdapterImpl(
 ) : PaymentExternalSystemAdapter, AutoCloseable {
 
     companion object {
-        private val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        private val mapper = ObjectMapper().registerKotlinModule()
+        val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
+        val mapper = ObjectMapper().registerKotlinModule()
     }
 
     private val sharedScheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(
