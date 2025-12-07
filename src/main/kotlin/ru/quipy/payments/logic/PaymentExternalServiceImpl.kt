@@ -20,6 +20,7 @@ import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
+import kotlin.random.Random
 
 
 // Advice: always treat time as a Duration
@@ -36,7 +37,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
-    private val remaining = 20_000L
+    private val maxRequestTimeout = 20_000L
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests = meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
@@ -79,14 +80,28 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         val timeBeforeCall = now()
-        remaining.coerceAtMost(this.remaining)
-        tryAcquire(now(), remaining)
-        if (!rateLimit.tickBlockingWithTimeout(deadline - now())) {
-            throw TooManyRequestsException(deadline)
+
+        if (!tryAcquire(now(), deadline - now())) {
+            val retryAfterMs = (requestAverageProcessingTime.toMillis() / parallelRequests * 10).coerceIn(10, 100) + Random.nextLong(10)
+
+            throw TooManyRequestsException(retryAfterMs)
         }
+
+        if (!rateLimit.tickBlockingWithTimeout(deadline - now())) {
+            parallelLimiter.release()
+
+            val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
+            throw TooManyRequestsException(retryAfterMs)
+        }
+
+        val requestTimeout = minOf(
+            deadline - now(),
+            requestAverageProcessingTime.toMillis() * 2
+        ).coerceAtLeast(100)
+
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(Duration.ofMillis(30_000))
+            .timeout(Duration.ofMillis(requestTimeout))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
@@ -155,6 +170,7 @@ class PaymentExternalSystemAdapterImpl(
                                     it.logProcessing(false, now(), transactionId, "Deadline expired")
                                 }
                                 startedRequests.increment()
+                                parallelLimiter.release()
                             } else {
                                 Thread.sleep(capped)
                                 completeAction(
