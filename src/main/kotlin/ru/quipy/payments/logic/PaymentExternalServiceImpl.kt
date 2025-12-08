@@ -74,10 +74,6 @@ class PaymentExternalSystemAdapterImpl(
         .version(HttpClient.Version.HTTP_2)
         .build()
 
-    private val retryScheduler = Executors.newScheduledThreadPool(
-        Runtime.getRuntime().availableProcessors()
-    )
-
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
@@ -133,7 +129,7 @@ class PaymentExternalSystemAdapterImpl(
 
 
 
-        completeAction(0, request, paymentId, transactionId, deadline)
+        scope.launch {  completeAction(0, request, paymentId, transactionId, deadline) }
     }
 
     override fun price() = properties.price
@@ -142,17 +138,17 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
-    fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
+    suspend fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
         var isAcquired = parallelLimiter.tryAcquire()
         while (!isAcquired && now() - startedAt < remaining) {
             isAcquired = parallelLimiter.tryAcquire()
-            Thread.sleep(1)
+            delay(2)
         }
 
         return isAcquired
     }
 
-    fun completeAction(
+    suspend fun completeAction(
         retryCount: Long,
         request: HttpRequest,
         paymentId: UUID,
@@ -173,7 +169,6 @@ class PaymentExternalSystemAdapterImpl(
         }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
-                scope.launch {
                     if (throwable != null) {
                         val e = throwable.cause
                         var isRetriable = true
@@ -213,7 +208,6 @@ class PaymentExternalSystemAdapterImpl(
                                     scheduleRetry(
                                         retryCount, request, paymentId, transactionId, deadline, capped
                                     )
-                                    return@launch
                                 } else {
                                     paymentESService.update(paymentId) {
                                         it.logProcessing(false, now(), transactionId, "Non-retriable exception")
@@ -249,7 +243,6 @@ class PaymentExternalSystemAdapterImpl(
                             parallelLimiter.release()
                         }
                     }
-                }
             }
     }
 
@@ -257,32 +250,29 @@ class PaymentExternalSystemAdapterImpl(
         retryCount: Long, request: HttpRequest, paymentId: UUID,
         transactionId: UUID, deadline: Long, delay: Long
     ) {
-        retryScheduler.schedule({
+        scope.launch {
+            delay(delay)
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
-                scope.launch {
-                    try {
-                        paymentESService.update(paymentId) {
-                            it.logProcessing(false, now(), transactionId, "Not enough time for retry")
-                        }
-                    } catch (e: Exception) {
-                        logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
-                    } finally {
-                        startedRequests.increment()
+                try {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, "Not enough time for retry")
                     }
+                } catch (e: Exception) {
+                    logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
+                } finally {
+                    startedRequests.increment()
                 }
-                return@schedule
+            } else {
+                val newRequestTimeout = remainingTime.coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
+                val newRequest = HttpRequest.newBuilder()
+                    .uri(request.uri())
+                    .timeout(Duration.ofMillis(newRequestTimeout))
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build()
+                completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
             }
-
-            val newRequestTimeout = remainingTime.coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
-            val newRequest = HttpRequest.newBuilder()
-                .uri(request.uri())
-                .timeout(Duration.ofMillis(newRequestTimeout))
-                .POST(HttpRequest.BodyPublishers.noBody())
-                .build()
-
-            completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
-        }, delay, TimeUnit.MILLISECONDS)
+        }
     }
 }
 
