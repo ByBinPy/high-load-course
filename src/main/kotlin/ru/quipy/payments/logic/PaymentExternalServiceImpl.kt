@@ -2,9 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import com.github.dockerjava.api.model.Link
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -62,7 +60,7 @@ class PaymentExternalSystemAdapterImpl(
         .build()
 
 
-    override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
 
@@ -73,29 +71,8 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-        val remaining = deadline - now()
-        if (remaining <= 0) {
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, "deadline expired")
-            }
-            return
-        }
 
-        val timeBeforeCall = now()
-        remaining.coerceAtMost(this.remaining)
-        tryAcquire(now(), remaining)
-        if (!rateLimit.tickBlocking(deadline- now())) {
-            throw TooManyRequestsException(deadline)
-        }
-        val request = HttpRequest.newBuilder()
-            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(Duration.ofMillis(30_000))
-            .POST(HttpRequest.BodyPublishers.noBody())
-            .build()
-
-        val retryCount = 0L
-
-        completeAction(retryCount, request, paymentId, transactionId, timeBeforeCall, deadline)
+        completeAction(0, paymentId, transactionId, deadline, amount)
     }
 
     override fun price() = properties.price
@@ -113,7 +90,27 @@ class PaymentExternalSystemAdapterImpl(
         return isAcquired
     }
 
-    fun completeAction(retryCount: Long, request: HttpRequest, paymentId: UUID, transactionId: UUID, timeBeforeCall: Long, deadline: Long) {
+    fun completeAction(retryCount: Long, paymentId: UUID, transactionId: UUID, deadline: Long, amount: Int) {
+        val remaining = deadline - now()
+        if (remaining <= 0) {
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, "deadline expired")
+            }
+            return
+        }
+
+        val timeBeforeCall = now()
+        remaining.coerceAtMost(this.remaining)
+        tryAcquire(now(), remaining)
+        if (!rateLimit.tickBlocking(deadline- now())) {
+            throw TooManyRequestsException(deadline)
+        }
+        val request = HttpRequest.newBuilder()
+            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
+            .timeout(Duration.ofMillis(10_000))
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build()
+
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                     if (throwable != null) {
@@ -162,11 +159,10 @@ class PaymentExternalSystemAdapterImpl(
                                 Thread.sleep(backoff)
                                 completeAction(
                                     retryCount + 1,
-                                    request,
                                     paymentId,
                                     transactionId,
-                                    timeBeforeCall,
-                                    deadline
+                                    deadline,
+                                    amount
                                 )
                             }
                         }
