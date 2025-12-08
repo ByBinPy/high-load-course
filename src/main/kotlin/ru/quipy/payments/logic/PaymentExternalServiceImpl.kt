@@ -51,9 +51,10 @@ class PaymentExternalSystemAdapterImpl(
         )
     }
 
+    private val httpExecutor = Executors.newFixedThreadPool(parallelRequests)
     private val httpClient = HttpClient
         .newBuilder()
-        .executor(Executors.newFixedThreadPool(parallelRequests))
+        .executor(httpExecutor)
         .version(HttpClient.Version.HTTP_2)
         .build()
 
@@ -147,7 +148,7 @@ class PaymentExternalSystemAdapterImpl(
                                 }
                                 startedRequests.increment()
                             } else {
-                                delayedExecutor(capped, TimeUnit.MILLISECONDS)
+                                delayedExecutor(backoff, TimeUnit.MILLISECONDS, httpExecutor)
                                     .execute {
                                         completeAction(
                                             retryCount + 1,
