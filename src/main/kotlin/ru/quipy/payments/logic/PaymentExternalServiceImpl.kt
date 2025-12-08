@@ -69,12 +69,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-        val request = HttpRequest.newBuilder()
-            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(requestAverageProcessingTime)
-            .POST(HttpRequest.BodyPublishers.noBody())
-            .build()
-        completeAction(0, paymentId, transactionId, deadline, amount, request)
+        completeAction(0, paymentId, transactionId, deadline, amount)
     }
 
     override fun price() = properties.price
@@ -83,7 +78,7 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
-    fun completeAction(retryCount: Long, paymentId: UUID, transactionId: UUID, deadline: Long, amount: Int, request: HttpRequest) {
+    fun completeAction(retryCount: Long, paymentId: UUID, transactionId: UUID, deadline: Long, amount: Int) {
         val remaining = deadline - now()
         if (remaining <= 0) {
             paymentESService.update(paymentId) {
@@ -96,7 +91,11 @@ class PaymentExternalSystemAdapterImpl(
         if (!rateLimit.tick()) {
             throw TooManyRequestsException(deadline)
         }
-
+        val request = HttpRequest.newBuilder()
+            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
+            .timeout(Duration.ofMillis(remaining.coerceAtLeast(requestAverageProcessingTime.toMillis())))
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                     if (throwable != null) {
@@ -155,18 +154,9 @@ class PaymentExternalSystemAdapterImpl(
                                             paymentId,
                                             transactionId,
                                             deadline,
-                                            amount,
-                                            request
+                                            amount
                                         )
                                     }
-                                completeAction(
-                                    retryCount + 1,
-                                    paymentId,
-                                    transactionId,
-                                    deadline,
-                                    amount,
-                                    request
-                                )
                             }
                         }
                     } else {
