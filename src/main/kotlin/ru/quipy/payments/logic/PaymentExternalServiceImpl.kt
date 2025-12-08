@@ -160,19 +160,15 @@ class PaymentExternalSystemAdapterImpl(
         deadline: Long
     ) {
         val timeBeforeCall = now()
-
+        if (!rateLimit.tick()) {
+            val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
+            throw TooManyRequestsException(retryAfterMs)
+        }
         if (!tryAcquire(now(), deadline - now())) {
             val retryAfterMs = (requestAverageProcessingTime.toMillis() / parallelRequests * 10).coerceIn(
                 10, 100
             ) + Random.nextLong(10)
 
-            throw TooManyRequestsException(retryAfterMs)
-        }
-
-        if (!rateLimit.tick()) {
-            parallelLimiter.release()
-
-            val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
             throw TooManyRequestsException(retryAfterMs)
         }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
