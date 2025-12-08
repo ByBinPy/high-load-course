@@ -71,7 +71,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-
+        tryAcquire(now(), remaining)
         completeAction(0, paymentId, transactionId, deadline, amount)
     }
 
@@ -101,13 +101,12 @@ class PaymentExternalSystemAdapterImpl(
 
         val timeBeforeCall = now()
         remaining.coerceAtMost(this.remaining)
-        tryAcquire(now(), remaining)
         if (!rateLimit.tickBlocking(deadline- now())) {
             throw TooManyRequestsException(deadline)
         }
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(Duration.ofMillis(10_000))
+            .timeout(requestAverageProcessingTime)
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
