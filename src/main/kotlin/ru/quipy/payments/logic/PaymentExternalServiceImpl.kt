@@ -131,6 +131,10 @@ class PaymentExternalSystemAdapterImpl(
                                 paymentESService.update(paymentId) {
                                     it.logProcessing(false, now(), transactionId, "io exception")
                                 }
+
+                                paymentESService.update(paymentId) {
+                                    it.logProcessing(false, now(), transactionId, "Fail")
+                                }
                             }
                         }
 
@@ -138,7 +142,6 @@ class PaymentExternalSystemAdapterImpl(
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
                             }
-                            startedRequests.increment()
                         } else {
                             val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + kotlin.random.Random.nextLong(10))
                             val capped = backoff.coerceAtMost(deadline - now() - 5)
@@ -146,8 +149,8 @@ class PaymentExternalSystemAdapterImpl(
                                 paymentESService.update(paymentId) {
                                     it.logProcessing(false, now(), transactionId, "Deadline expired")
                                 }
-                                startedRequests.increment()
                             } else {
+                                startedRequests.increment()
                                 delayedExecutor(backoff, TimeUnit.MILLISECONDS, httpExecutor)
                                     .execute {
                                         completeAction(
