@@ -5,6 +5,7 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
+import okio.EOFException
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -168,7 +169,7 @@ class PaymentExternalSystemAdapterImpl(
             throw TooManyRequestsException(retryAfterMs)
         }
 
-        if (!rateLimit.tickBlockingWithTimeout(deadline - now())) {
+        if (!rateLimit.tick()) {
             parallelLimiter.release()
 
             val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
@@ -179,6 +180,7 @@ class PaymentExternalSystemAdapterImpl(
                 scope.launch {
                     if (throwable != null) {
                         val e = throwable.cause
+                        var isRetriable = true
                         when (throwable.cause) {
                             is SocketTimeoutException -> {
                                 logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
@@ -188,8 +190,13 @@ class PaymentExternalSystemAdapterImpl(
                                 logger.warn("[$accountName] interrupted: $paymentId", e)
                             }
 
+                            is EOFException -> {
+                                logger.warn("[$accountName] eof exception in: $paymentId", e)
+                            }
+
                             else -> {
                                 logger.warn("[$accountName] io error: $paymentId", e)
+                                isRetriable = false
                             }
                         }
 
@@ -205,11 +212,17 @@ class PaymentExternalSystemAdapterImpl(
                                     it.logProcessing(false, now(), transactionId, "Deadline expired")
                                 }
                             } else {
-                                parallelLimiter.release()
-                                scheduleRetry(
-                                    retryCount, request, paymentId, transactionId, deadline, capped
-                                )
-                                return@launch
+                                if (isRetriable) {
+                                    parallelLimiter.release()
+                                    scheduleRetry(
+                                        retryCount, request, paymentId, transactionId, deadline, capped
+                                    )
+                                    return@launch
+                                } else {
+                                    paymentESService.update(paymentId) {
+                                        it.logProcessing(false, now(), transactionId, "Non-retriable exception")
+                                    }
+                                }
                             }
                         }
                     } else {
