@@ -131,9 +131,9 @@ class PaymentExternalSystemAdapterImpl(
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-        val retryCount = 0L
 
-        completeAction(retryCount, request, paymentId, transactionId, deadline)
+
+        completeAction(0, request, paymentId, transactionId, deadline)
     }
 
     override fun price() = properties.price
@@ -222,6 +222,7 @@ class PaymentExternalSystemAdapterImpl(
                                     paymentESService.update(paymentId) {
                                         it.logProcessing(false, now(), transactionId, "Non-retriable exception")
                                     }
+                                    parallelLimiter.release()
                                 }
                             }
                         }
