@@ -17,6 +17,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture.delayedExecutor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
@@ -68,7 +69,12 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-        completeAction(0, paymentId, transactionId, deadline, amount)
+        val request = HttpRequest.newBuilder()
+            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
+            .timeout(requestAverageProcessingTime)
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build()
+        completeAction(0, paymentId, transactionId, deadline, amount, request)
     }
 
     override fun price() = properties.price
@@ -77,7 +83,7 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
-    fun completeAction(retryCount: Long, paymentId: UUID, transactionId: UUID, deadline: Long, amount: Int) {
+    fun completeAction(retryCount: Long, paymentId: UUID, transactionId: UUID, deadline: Long, amount: Int, request: HttpRequest) {
         val remaining = deadline - now()
         if (remaining <= 0) {
             paymentESService.update(paymentId) {
@@ -90,11 +96,6 @@ class PaymentExternalSystemAdapterImpl(
         if (!rateLimit.tick()) {
             throw TooManyRequestsException(deadline)
         }
-        val request = HttpRequest.newBuilder()
-            .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(requestAverageProcessingTime)
-            .POST(HttpRequest.BodyPublishers.noBody())
-            .build()
 
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
@@ -147,13 +148,24 @@ class PaymentExternalSystemAdapterImpl(
                                 }
                                 startedRequests.increment()
                             } else {
-                                Thread.sleep(backoff)
+                                delayedExecutor(capped, TimeUnit.MILLISECONDS)
+                                    .execute {
+                                        completeAction(
+                                            retryCount + 1,
+                                            paymentId,
+                                            transactionId,
+                                            deadline,
+                                            amount,
+                                            request
+                                        )
+                                    }
                                 completeAction(
                                     retryCount + 1,
                                     paymentId,
                                     transactionId,
                                     deadline,
-                                    amount
+                                    amount,
+                                    request
                                 )
                             }
                         }
