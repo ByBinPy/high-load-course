@@ -63,7 +63,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val rateLimit: SlidingWindowRateLimiter by lazy {
         SlidingWindowRateLimiter(
-            rate = (rateLimitPerSec * 0.95).toLong(),
+            rate = rateLimitPerSec.toLong(),
             window = Duration.ofMillis(1000),
         )
     }
@@ -116,7 +116,6 @@ class PaymentExternalSystemAdapterImpl(
 
         if (requestTimeout < requestAverageProcessingTime.toMillis()) {
             logger.warn("[$accountName] Timeout too short for payment $paymentId: ${requestTimeout}ms")
-            parallelLimiter.release()
             val retryAfterMs = requestAverageProcessingTime.toMillis() - requestTimeout + Random.nextLong(100)
             throw TooManyRequestsException(retryAfterMs)
         }
@@ -167,6 +166,7 @@ class PaymentExternalSystemAdapterImpl(
 
             throw TooManyRequestsException(retryAfterMs)
         }
+        startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                     if (throwable != null) {
@@ -195,6 +195,7 @@ class PaymentExternalSystemAdapterImpl(
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
                             }
+                            parallelLimiter.release()
                         } else {
                             val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + Random.nextLong(10))
                             val capped = backoff.coerceAtMost(deadline - now() - 5)
@@ -239,7 +240,6 @@ class PaymentExternalSystemAdapterImpl(
                         } catch (e: Exception) {
                             logger.error("[$accountName] Error processing payment $paymentId", e)
                         } finally {
-                            startedRequests.increment()
                             parallelLimiter.release()
                         }
                     }
@@ -260,8 +260,6 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 } catch (e: Exception) {
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
-                } finally {
-                    startedRequests.increment()
                 }
             } else {
                 val newRequestTimeout = remainingTime.coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
