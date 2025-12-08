@@ -272,7 +272,6 @@ class PaymentExternalSystemAdapterImpl(
                         logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
                     } finally {
                         startedRequests.increment()
-                        parallelLimiter.release()
                     }
                 }
                 return@schedule
