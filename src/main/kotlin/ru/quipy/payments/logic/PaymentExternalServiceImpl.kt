@@ -3,7 +3,6 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -30,7 +29,6 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentProviderHostPort: String,
     private val token: String,
     meterRegistry: MeterRegistry,
-    private val parallelLimiter: Semaphore
 ) : PaymentExternalSystemAdapter {
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
@@ -89,7 +87,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         val timeBeforeCall = now()
-        if (!rateLimit.tickBlocking(deadline- now())) {
+        if (!rateLimit.tick()) {
             throw TooManyRequestsException(deadline)
         }
         val request = HttpRequest.newBuilder()
@@ -140,7 +138,6 @@ class PaymentExternalSystemAdapterImpl(
                                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
                             }
                             startedRequests.increment()
-                            parallelLimiter.release()
                         } else {
                             val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + kotlin.random.Random.nextLong(10))
                             val capped = backoff.coerceAtMost(deadline - now() - 5)
@@ -163,7 +160,6 @@ class PaymentExternalSystemAdapterImpl(
                     } else {
                         startedRequests.increment()
                         try {
-                            logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits)
                             logger.info(
                                 "success in callback for payment: {}, retry count: {}, in time: {}",
                                 paymentId,
@@ -181,7 +177,6 @@ class PaymentExternalSystemAdapterImpl(
                                 it.logProcessing(parsed.result, now(), transactionId, parsed.message)
                             }
                         } finally {
-                            parallelLimiter.release()
                             timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                         }
                     }
