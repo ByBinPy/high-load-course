@@ -26,7 +26,7 @@ class OrderPayer(meterRegistry: MeterRegistry) {
     private lateinit var paymentService: PaymentService
 
 
-    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         plannedRequests.increment()
         val createdEvent = paymentESService.create {

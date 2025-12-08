@@ -26,8 +26,13 @@ class GlobalExceptionHandler(
     fun handleTooManyRequests(exception: TooLongRequestException): ResponseEntity<String> {
         return ResponseEntity.status(200).body("your request very long, i am so sorry")
     }
+
     @ExceptionHandler(TooManyRequestsException::class)
     fun handleTooManyRequestsRetriable(exception: TooManyRequestsException): ResponseEntity<String> {
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", "1").body("to many requests")
+        val retryAfterSeconds = (exception.retryAfterMs / 1000.0).coerceAtLeast(0.1)
+        return ResponseEntity
+            .status(HttpStatus.TOO_MANY_REQUESTS)
+            .header("Retry-After", retryAfterSeconds.toString())
+            .body("too many requests")
     }
 }

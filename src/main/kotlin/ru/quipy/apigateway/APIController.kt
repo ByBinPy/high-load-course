@@ -11,6 +11,7 @@ import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.time.Duration
 import java.util.*
+import kotlin.random.Random
 
 @RestController
 class APIController(
@@ -23,7 +24,7 @@ class APIController(
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
 
     @PostMapping("/users")
-    suspend fun createUser(@RequestBody req: CreateUserRequest): User {
+    fun createUser(@RequestBody req: CreateUserRequest): User {
         return User(UUID.randomUUID(), req.name)
     }
 
@@ -32,7 +33,7 @@ class APIController(
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -58,9 +59,10 @@ class APIController(
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
         if (!rateLimiter.tick()) {
-            throw TooManyRequestsException(deadline)
+            val retryAfterMs = 10L + Random.nextLong(10)
+            throw TooManyRequestsException(retryAfterMs)
         }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
