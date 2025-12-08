@@ -9,6 +9,7 @@ import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
+import java.io.EOFException
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.net.URI
@@ -35,8 +36,6 @@ class PaymentExternalSystemAdapterImpl(
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
         val mapper = ObjectMapper().registerKotlinModule()
     }
-
-    private val remaining = 20_000L
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests = meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
@@ -71,7 +70,6 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-        tryAcquire(now(), remaining)
         completeAction(0, paymentId, transactionId, deadline, amount)
     }
 
@@ -80,15 +78,6 @@ class PaymentExternalSystemAdapterImpl(
     override fun isEnabled() = properties.enabled
 
     override fun name() = properties.accountName
-
-    fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
-        var isAcquired = parallelLimiter.tryAcquire()
-        while (!isAcquired && now()-startedAt < remaining) {
-            isAcquired = parallelLimiter.tryAcquire()
-        }
-
-        return isAcquired
-    }
 
     fun completeAction(retryCount: Long, paymentId: UUID, transactionId: UUID, deadline: Long, amount: Int) {
         val remaining = deadline - now()
@@ -100,7 +89,6 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         val timeBeforeCall = now()
-        remaining.coerceAtMost(this.remaining)
         if (!rateLimit.tickBlocking(deadline- now())) {
             throw TooManyRequestsException(deadline)
         }
@@ -119,6 +107,13 @@ class PaymentExternalSystemAdapterImpl(
                                 logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
                                 paymentESService.update(paymentId) {
                                     it.logProcessing(false, now(), transactionId, "socket timeout")
+                                }
+                            }
+
+                            is EOFException -> {
+                                logger.warn("[$accountName] attempt ${retryCount + 1} eof for: $paymentId", e)
+                                paymentESService.update(paymentId) {
+                                    it.logProcessing(false, now(), transactionId, "eof exception")
                                 }
                             }
 
