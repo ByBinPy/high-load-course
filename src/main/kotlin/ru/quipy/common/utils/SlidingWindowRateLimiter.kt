@@ -18,7 +18,7 @@ class SlidingWindowRateLimiter(
     private val rateLimiterScope = CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
     private val sum = AtomicLong(0)
-    private val queue = PriorityBlockingQueue<Measure>(10_000)
+    private val queue = PriorityBlockingQueue<Measure>(20_000)
 
     override fun tick(): Boolean {
         while (true) {
