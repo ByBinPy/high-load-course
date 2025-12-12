@@ -40,6 +40,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
+    private val time_95_percentile = 20_000
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         logger.error("[$accountName] Unhandled exception in payment adapter coroutine", throwable)
     }
@@ -98,7 +99,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         val requestTimeout = minOf(
-            deadline - now(),
+            time_95_percentile.toLong(),
             requestAverageProcessingTime.toMillis()
         ).coerceAtLeast(100)
 
