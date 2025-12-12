@@ -43,10 +43,10 @@ class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: Mete
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        if (!rateLimiter.tick()) {
-            val retryAfterMs = (1000L / 1100 * 10).coerceIn(10, 100) + Random.nextLong(10)
-            throw TooManyRequestsException(retryAfterMs)
-        }
+//        if (!rateLimiter.tick()) {
+//            val retryAfterMs = (1000L / 1100 * 10).coerceIn(10, 100) + Random.nextLong(10)
+//            throw TooManyRequestsException(retryAfterMs)
+//        }
         paymentExecutor.submit {
             plannedRequests.increment()
             val createdEvent = paymentESService.create {

@@ -18,7 +18,7 @@ class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
     @field:Qualifier("parallelLimiter")
-    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(1500, Duration.ofSeconds(1), 3300)
+    private val rateLimiter: RateLimiter = LeakingBucketRateLimiter(1100, Duration.ofSeconds(1), 3300)
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
