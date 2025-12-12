@@ -14,10 +14,10 @@ class OnlineShopApplication {
     val log: Logger = LoggerFactory.getLogger(OnlineShopApplication::class.java)
 
     companion object {
-        val appExecutor = Executors.newFixedThreadPool(20_000, NamedThreadFactory("main-app-executor")).asCoroutineDispatcher()
+        val appExecutor = Executors.newFixedThreadPool(64, NamedThreadFactory("main-app-executor")).asCoroutineDispatcher()
     }
 }
 
-suspend fun main(args: Array<String>) {
+fun main(args: Array<String>) {
     runApplication<OnlineShopApplication>(*args)
 }

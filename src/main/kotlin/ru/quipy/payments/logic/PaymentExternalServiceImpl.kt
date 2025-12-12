@@ -4,10 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Semaphore
 import okio.EOFException
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.exceptions.TooManyRequestsException
@@ -21,6 +19,7 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 import kotlin.random.Random
@@ -33,10 +32,8 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentProviderHostPort: String,
     private val token: String,
     meterRegistry: MeterRegistry,
-    private val parallelLimiter: Semaphore, ioDispatcher: CoroutineDispatcher = Executors.newFixedThreadPool(
-        Runtime.getRuntime().availableProcessors() * 2,
-        NamedThreadFactory("payment-io-")
-    ).asCoroutineDispatcher()
+    private val parallelLimiter: Semaphore,
+    private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
@@ -46,8 +43,6 @@ class PaymentExternalSystemAdapterImpl(
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         logger.error("[$accountName] Unhandled exception in payment adapter coroutine", throwable)
     }
-
-    private val scope = CoroutineScope(SupervisorJob() + ioDispatcher + exceptionHandler)
 
 
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
@@ -61,12 +56,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val rateLimit: SlidingWindowRateLimiter by lazy {
-        SlidingWindowRateLimiter(
-            rate = rateLimitPerSec.toLong(),
-            window = Duration.ofMillis(1000),
-        )
-    }
+
 
     private val httpClient = HttpClient
         .newBuilder()
@@ -80,7 +70,6 @@ class PaymentExternalSystemAdapterImpl(
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-        scope.launch {
             try {
                 paymentESService.update(paymentId) {
                     it.logSubmission(
@@ -94,7 +83,6 @@ class PaymentExternalSystemAdapterImpl(
             } catch (e: Exception) {
                 logger.error("[$accountName] Failed to record log submission for $paymentId", e)
             }
-        }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
@@ -126,9 +114,7 @@ class PaymentExternalSystemAdapterImpl(
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-
-
-        scope.launch {  completeAction(0, request, paymentId, transactionId, deadline) }
+        completeAction(0, request, paymentId, transactionId, deadline)
     }
 
     override fun price() = properties.price
@@ -137,17 +123,7 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
-    suspend fun tryAcquire(startedAt: Long, remaining: Long): Boolean {
-        var isAcquired = parallelLimiter.tryAcquire()
-        while (!isAcquired && now() - startedAt < remaining) {
-            isAcquired = parallelLimiter.tryAcquire()
-            delay(2)
-        }
-
-        return isAcquired
-    }
-
-    suspend fun completeAction(
+    fun completeAction(
         retryCount: Long,
         request: HttpRequest,
         paymentId: UUID,
@@ -155,11 +131,8 @@ class PaymentExternalSystemAdapterImpl(
         deadline: Long
     ) {
         val timeBeforeCall = now()
-        if (!rateLimit.tick()) {
-            val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
-            throw TooManyRequestsException(retryAfterMs)
-        }
-        if (!tryAcquire(now(), deadline - now())) {
+
+        if (!parallelLimiter.tryAcquire(deadline - now(), TimeUnit.MILLISECONDS)) {
             val retryAfterMs = (requestAverageProcessingTime.toMillis() / parallelRequests * 10).coerceIn(
                 10, 100
             ) + Random.nextLong(10)
@@ -219,7 +192,7 @@ class PaymentExternalSystemAdapterImpl(
                         }
                     } else {
                         try {
-                            logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits)
+                            logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits())
                             logger.info(
                                 "success in callback for payment: {}, retry count: {}, in time: {}",
                                 paymentId,
@@ -250,8 +223,8 @@ class PaymentExternalSystemAdapterImpl(
         retryCount: Long, request: HttpRequest, paymentId: UUID,
         transactionId: UUID, deadline: Long, delay: Long
     ) {
-        scope.launch {
-            delay(delay)
+
+        Thread.sleep(delay)
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
                 try {
@@ -268,8 +241,11 @@ class PaymentExternalSystemAdapterImpl(
                     .timeout(Duration.ofMillis(newRequestTimeout))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
+                if (!rateLimiter.tick()) {
+                    val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
+                    throw TooManyRequestsException(retryAfterMs)
+                }
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
-            }
         }
     }
 }
