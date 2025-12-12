@@ -26,11 +26,11 @@ class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: Mete
     private val plannedRequests = meterRegistry.counter("payment.processing.planned", "accountName", "acc-12")
 
     private val paymentExecutor = ThreadPoolExecutor(
-        50,
-        50,
+        1000,
+        1000,
         100L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(40_000),
+        LinkedBlockingQueue(100_000),
         NamedThreadFactory("payment-submission-executor")
     )
 
