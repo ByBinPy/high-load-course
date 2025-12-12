@@ -3,7 +3,6 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.*
 import okio.EOFException
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -41,9 +40,6 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private val time_95_percentile = 20_000
-    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
-        logger.error("[$accountName] Unhandled exception in payment adapter coroutine", throwable)
-    }
 
 
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
@@ -224,9 +220,9 @@ class PaymentExternalSystemAdapterImpl(
         retryCount: Long, request: HttpRequest, paymentId: UUID,
         transactionId: UUID, deadline: Long, delay: Long
     ) {
-
+        parallelLimiter.release()
         Thread.sleep(delay)
-            val remainingTime = deadline - now()
+        val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
                 try {
                     paymentESService.update(paymentId) {
