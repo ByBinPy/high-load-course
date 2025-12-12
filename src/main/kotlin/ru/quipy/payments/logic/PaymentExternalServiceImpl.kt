@@ -20,6 +20,7 @@ import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import kotlin.math.log
 import kotlin.math.pow
 import kotlin.random.Random
 
@@ -42,9 +43,12 @@ class PaymentExternalSystemAdapterImpl(
     private val time_95_percentile = 20_000
 
 
+
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests =
         meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
+    private val requestsRetried =
+        meterRegistry.counter("payment.request.retried", "accountName", properties.accountName)
     private val timer =
         meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val serviceName = properties.serviceName
@@ -220,6 +224,8 @@ class PaymentExternalSystemAdapterImpl(
         retryCount: Long, request: HttpRequest, paymentId: UUID,
         transactionId: UUID, deadline: Long, delay: Long
     ) {
+        requestsRetried.increment()
+        logger.info("Completing retry. All retry count - {}", requestsRetried.count())
         parallelLimiter.release()
         Thread.sleep(delay)
         val remainingTime = deadline - now()
