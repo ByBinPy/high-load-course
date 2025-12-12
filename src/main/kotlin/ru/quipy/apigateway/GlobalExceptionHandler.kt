@@ -31,7 +31,7 @@ class GlobalExceptionHandler(
     fun handleTooManyRequestsRetriable(exception: TooManyRequestsException): ResponseEntity<String> {
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", "10")
+            .header("Retry-After", exception.retryAfterMs.toString())
             .body("too many requests")
     }
 }
