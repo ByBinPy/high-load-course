@@ -40,7 +40,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
-    private val time_95_percentile = 20_000
+    private val time_95_percentile = 30_000
 
 
 
