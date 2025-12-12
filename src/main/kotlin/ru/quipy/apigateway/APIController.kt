@@ -60,10 +60,10 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        if (!rateLimiter.tick()) {
-            val retryAfterMs = 10L + Random.nextLong(10)
-            throw TooManyRequestsException(retryAfterMs)
-        }
+//        if (!rateLimiter.tick()) {
+//            val retryAfterMs = 10L + Random.nextLong(10)
+//            throw TooManyRequestsException(retryAfterMs)
+//        }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
