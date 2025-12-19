@@ -37,6 +37,7 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
+    private val retryCounter = meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -153,7 +154,6 @@ class PaymentExternalSystemAdapterImpl(
                 }
                 return
             }
-
             val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + kotlin.random.Random.nextLong(10))
             val capped = backoff.coerceAtMost(deadline - now() - 5)
             if (capped <= 0) {
@@ -162,6 +162,8 @@ class PaymentExternalSystemAdapterImpl(
                 }
                 return
             }
+
+            retryCounter.increment()
             Thread.sleep(capped)
         }
     }
@@ -175,4 +177,4 @@ class PaymentExternalSystemAdapterImpl(
         return deadline - now()
     }
 }
-public fun now() = System.currentTimeMillis()
+fun now() = System.currentTimeMillis()
