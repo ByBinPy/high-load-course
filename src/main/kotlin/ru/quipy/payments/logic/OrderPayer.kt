@@ -3,6 +3,7 @@ package ru.quipy.payments.logic
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
@@ -18,16 +19,14 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 @Service
-class OrderPayer {
+class OrderPayer(
+    val rateLimiter: SlidingWindowRateLimiter,
+    @Qualifier("warehouseIfUnfinishedWork")
+    val paymentExecutor: ThreadPoolExecutor
+) {
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-    }
-    private val rateLimit: SlidingWindowRateLimiter by lazy {
-        SlidingWindowRateLimiter(
-            rate = 8,
-            window = Duration.ofMillis(1000),
-        )
     }
 
     @Autowired
@@ -36,19 +35,9 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
-        0,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8_000),
-        NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
-    )
-
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        if (!rateLimit.tickBlocking(deadline- System.currentTimeMillis())) {
+        if (!rateLimiter.tickBlocking(deadline- System.currentTimeMillis())) {
             throw TooManyRequestsException(deadline)
         }
         paymentExecutor.submit {

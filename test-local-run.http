@@ -1,14 +1,40 @@
-### Run test locally
+### Test 6 run...
 POST http://localhost:1234/test/run
 Content-Type: application/json
 
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "ratePerSecond": 1,
-  "testCount": 100,
-  "processingTimeMillis": 80000
+  "ratePerSecond": 100,
+  "testCount": 5000,
+  "processingTimeMillis": 20000
 }
+
+### Test 7 run...
+POST http://localhost:1234/test/run
+Content-Type: application/json
+
+{
+  "serviceName": "{{serviceName}}",
+  "token": "{{token}}",
+  "ratePerSecond": 100,
+  "testCount": 5000,
+  "processingTimeMillis": 20000
+}
+
+### Test 8 run...
+POST http://localhost:1234/test/run
+Content-Type: application/json
+
+{
+  "serviceName": "{{serviceName}}",
+  "token": "{{token}}",
+  "ratePerSecond": 100,
+  "testCount": 5000,
+  "processingTimeMillis": 20000
+}
+
+
 
 ### Stop running test to save time and resources
 # @timeout 120
