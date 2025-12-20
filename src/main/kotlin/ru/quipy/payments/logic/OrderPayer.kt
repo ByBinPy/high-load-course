@@ -8,13 +8,11 @@ import org.springframework.stereotype.Service
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
-import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import kotlin.random.Random
 
 @Service
 class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: MeterRegistry) {
@@ -43,10 +41,6 @@ class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: Mete
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        if (!rateLimiter.tick()) {
-            val retryAfterMs = (1000L / 1100 * 10).coerceIn(10, 100) + Random.nextLong(10)
-            throw TooManyRequestsException(retryAfterMs)
-        }
         paymentExecutor.submit {
             plannedRequests.increment()
             val createdEvent = paymentESService.create {
