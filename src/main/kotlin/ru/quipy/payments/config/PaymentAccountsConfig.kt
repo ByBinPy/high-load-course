@@ -56,7 +56,7 @@ class PaymentAccountsConfig {
         @Value("\${payment.maximumPoolSize}")
         maximumPoolSize: Int
     ): ThreadPoolExecutor {
-        val poolSize = 100
+        val poolSize = 50000
         val temp = ThreadPoolExecutor(
             poolSize,
             poolSize,
@@ -90,7 +90,7 @@ class PaymentAccountsConfig {
         )
 
     @Bean
-    fun smoothOutIncoming(
+    fun outcomeRateLimiter(
         accountProperties: List<PaymentAccountProperties>,
     ): SlidingWindowRateLimiter =
         SlidingWindowRateLimiter(
@@ -124,19 +124,22 @@ class PaymentAccountsConfig {
     fun accountAdapters(
         paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
         meterRegistry: MeterRegistry,
-        accountProperties: List<PaymentAccountProperties>
+        accountProperties: List<PaymentAccountProperties>,
+        outcomeRateLimiter: SlidingWindowRateLimiter,
+        parallelLimiter: Semaphore
     ): List<PaymentExternalSystemAdapter> {
         return accountProperties
             .map { it.copy(enabled = true) }
             .onEach(::println)
             .map {
                 PaymentExternalSystemAdapterImpl(
-                    it,
-                    paymentService,
-                    paymentProviderHostPort,
-                    token,
-                    meterRegistry,
-                    parallelLimiter(accountProperties)
+                    properties = it,
+                    paymentESService = paymentService,
+                    paymentProviderHostPort = paymentProviderHostPort,
+                    token = token,
+                    meterRegistry = meterRegistry,
+                    parallelLimiter = parallelLimiter,
+                    rateLimiter = outcomeRateLimiter,
                 )
             }
     }

@@ -59,7 +59,7 @@ class APIController(
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
         if (!rateLimiter.tick()) {
-            throw TooManyRequestsException(deadline)
+            throw TooManyRequestsException(10)
         }
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {

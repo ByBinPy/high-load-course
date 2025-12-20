@@ -37,8 +37,8 @@ class OrderPayer(
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        if (!rateLimiter.tickBlocking(deadline- System.currentTimeMillis())) {
-            throw TooManyRequestsException(deadline)
+        if (!rateLimiter.tickBlocking(deadline - System.currentTimeMillis())) {
+            throw TooManyRequestsException(10)
         }
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
