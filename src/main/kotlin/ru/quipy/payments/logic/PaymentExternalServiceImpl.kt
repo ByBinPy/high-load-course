@@ -103,12 +103,6 @@ class PaymentExternalSystemAdapterImpl(
             requestAverageProcessingTime.toMillis()
         ).coerceAtLeast(100)
 
-        if (requestTimeout < requestAverageProcessingTime.toMillis()) {
-            logger.warn("[$accountName] Timeout too short for payment $paymentId: ${requestTimeout}ms")
-            val retryAfterMs = requestAverageProcessingTime.toMillis() - requestTimeout + Random.nextLong(100)
-            throw TooManyRequestsException(retryAfterMs)
-        }
-
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             .timeout(Duration.ofMillis(requestTimeout))
@@ -133,13 +127,6 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         val timeBeforeCall = now()
 
-        if (!parallelLimiter.tryAcquire(deadline - now(), TimeUnit.MILLISECONDS)) {
-            val retryAfterMs = (requestAverageProcessingTime.toMillis() / parallelRequests * 10).coerceIn(
-                10, 100
-            ) + Random.nextLong(10)
-
-            throw TooManyRequestsException(retryAfterMs)
-        }
         startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
@@ -244,10 +231,6 @@ class PaymentExternalSystemAdapterImpl(
                     .timeout(Duration.ofMillis(newRequestTimeout))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
-                if (!rateLimiter.tick()) {
-                    val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
-                    throw TooManyRequestsException(retryAfterMs)
-                }
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
         }
     }
