@@ -29,7 +29,7 @@ class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: Mete
         3600,
         100L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(200_000),
+        LinkedBlockingQueue(100_000),
         NamedThreadFactory("payment-submission-executor")
     )
 

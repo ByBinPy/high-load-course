@@ -40,7 +40,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
-    private val time_95_percentile = 20_000
+    private val time_95_percentile = 20_000L
 
     private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
 
@@ -99,7 +99,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         val requestTimeout = minOf(
-            time_95_percentile.toLong(),
+            time_95_percentile,
             requestAverageProcessingTime.toMillis()
         ).coerceAtLeast(100)
 
@@ -225,7 +225,7 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
                 }
             } else {
-                val newRequestTimeout = remainingTime.coerceIn(100, requestAverageProcessingTime.toMillis() * 2)
+                val newRequestTimeout = remainingTime.coerceIn(time_95_percentile, requestAverageProcessingTime.toMillis() * 2)
                 val newRequest = HttpRequest.newBuilder()
                     .uri(request.uri())
                     .timeout(Duration.ofMillis(newRequestTimeout))
@@ -233,7 +233,7 @@ class PaymentExternalSystemAdapterImpl(
                     .build()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
             }
-        }, delay, delay, TimeUnit.MILLISECONDS)
+        }, 0, delay, TimeUnit.MILLISECONDS)
     }
 }
 
