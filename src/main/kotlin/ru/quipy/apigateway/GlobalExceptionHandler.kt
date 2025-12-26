@@ -29,10 +29,9 @@ class GlobalExceptionHandler(
 
     @ExceptionHandler(TooManyRequestsException::class)
     fun handleTooManyRequestsRetriable(exception: TooManyRequestsException): ResponseEntity<String> {
-        val retryAfterSeconds = (exception.retryAfterMs / 1000.0).coerceAtLeast(0.1)
         return ResponseEntity
             .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", retryAfterSeconds.toString())
+            .header("Retry-After", "10")
             .body("too many requests")
     }
 }

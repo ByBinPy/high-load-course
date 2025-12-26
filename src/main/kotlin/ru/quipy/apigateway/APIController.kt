@@ -9,9 +9,9 @@ import ru.quipy.common.utils.RateLimiter
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import ru.quipy.payments.logic.now
 import java.time.Duration
 import java.util.*
-import kotlin.random.Random
 
 @RestController
 class APIController(
@@ -60,10 +60,10 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        if (!rateLimiter.tick()) {
-            val retryAfterMs = 10L + Random.nextLong(10)
-            throw TooManyRequestsException(retryAfterMs)
+        while (!rateLimiter.tick() && now() < deadline) {
         }
+        if (now() >= deadline)
+            throw TooManyRequestsException(10);
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
