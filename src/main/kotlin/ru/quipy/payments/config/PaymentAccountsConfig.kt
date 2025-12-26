@@ -53,8 +53,6 @@ class PaymentAccountsConfig {
     @Bean
     fun warehouseIfUnfinishedWork(
         accountProperties: List<PaymentAccountProperties>,
-        @Value("\${payment.maximumPoolSize}")
-        maximumPoolSize: Int
     ): ThreadPoolExecutor {
         val poolSize = 100
         val temp = ThreadPoolExecutor(
@@ -62,7 +60,7 @@ class PaymentAccountsConfig {
             poolSize,
             0,
             TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue(maximumPoolSize),
+            LinkedBlockingQueue(50_000),
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
