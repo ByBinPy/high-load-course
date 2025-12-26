@@ -124,7 +124,8 @@ class PaymentAccountsConfig {
     fun accountAdapters(
         paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
         meterRegistry: MeterRegistry,
-        accountProperties: List<PaymentAccountProperties>
+        accountProperties: List<PaymentAccountProperties>,
+        rateLimiter: SlidingWindowRateLimiter
     ): List<PaymentExternalSystemAdapter> {
         return accountProperties
             .map { it.copy(enabled = true) }
@@ -136,7 +137,8 @@ class PaymentAccountsConfig {
                     paymentProviderHostPort,
                     token,
                     meterRegistry,
-                    parallelLimiter(accountProperties)
+                    parallelLimiter(accountProperties),
+                    rateLimiter
                 )
             }
     }
