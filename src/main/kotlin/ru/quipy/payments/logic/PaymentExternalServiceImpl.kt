@@ -18,9 +18,9 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
-import kotlin.math.log
 import kotlin.math.pow
 import kotlin.random.Random
 
@@ -42,7 +42,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val time_95_percentile = 20_000
 
-
+    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
 
     // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests =
@@ -130,6 +130,7 @@ class PaymentExternalSystemAdapterImpl(
         startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
+                parallelLimiter.release()
                     if (throwable != null) {
                         val e = throwable.cause
                         var isRetriable = true
@@ -156,7 +157,6 @@ class PaymentExternalSystemAdapterImpl(
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
                             }
-                            parallelLimiter.release()
                         } else {
                             val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + Random.nextLong(10))
                             val capped = backoff.coerceAtMost(deadline - now() - 5)
@@ -166,7 +166,6 @@ class PaymentExternalSystemAdapterImpl(
                                 }
                             } else {
                                 if (isRetriable) {
-                                    parallelLimiter.release()
                                     scheduleRetry(
                                         retryCount, request, paymentId, transactionId, deadline, capped
                                     )
@@ -174,7 +173,6 @@ class PaymentExternalSystemAdapterImpl(
                                     paymentESService.update(paymentId) {
                                         it.logProcessing(false, now(), transactionId, "Non-retriable exception")
                                     }
-                                    parallelLimiter.release()
                                 }
                             }
                         }
@@ -200,8 +198,6 @@ class PaymentExternalSystemAdapterImpl(
                             timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                         } catch (e: Exception) {
                             logger.error("[$accountName] Error processing payment $paymentId", e)
-                        } finally {
-                            parallelLimiter.release()
                         }
                     }
             }
@@ -212,10 +208,14 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID, deadline: Long, delay: Long
     ) {
         requestsRetried.increment()
-        logger.info("Completing retry. All retry count - {}", requestsRetried.count())
-        parallelLimiter.release()
-        Thread.sleep(delay)
-        val remainingTime = deadline - now()
+        retryExecutor.scheduleWithFixedDelay({
+            while (!rateLimiter.tick() || now() < deadline) {
+            }
+            if (now() >= deadline)
+                throw TooManyRequestsException(10)
+
+            logger.info("Completing retry. All retry count - {}", requestsRetried.count())
+            val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
                 try {
                     paymentESService.update(paymentId) {
@@ -232,7 +232,8 @@ class PaymentExternalSystemAdapterImpl(
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
-        }
+            }
+        }, delay, delay, TimeUnit.MILLISECONDS)
     }
 }
 
