@@ -60,7 +60,7 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        while (!rateLimiter.tick() || now() < deadline) {
+        while (!rateLimiter.tick() && now() < deadline) {
         }
         if (now() >= deadline)
             throw TooManyRequestsException(10);

@@ -42,7 +42,7 @@ class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: Mete
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        while (!rateLimiter.tick() || now() < deadline) {
+        while (!rateLimiter.tick() && now() < deadline) {
         }
         if (now() >= deadline)
             throw TooManyRequestsException(10)

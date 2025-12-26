@@ -126,7 +126,7 @@ class PaymentExternalSystemAdapterImpl(
         deadline: Long
     ) {
         val timeBeforeCall = now()
-
+        parallelLimiter.acquire()
         startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
@@ -209,7 +209,7 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         requestsRetried.increment()
         retryExecutor.scheduleWithFixedDelay({
-            while (!rateLimiter.tick() || now() < deadline) {
+            while (!rateLimiter.tick() && now() < deadline) {
             }
             if (now() >= deadline)
                 throw TooManyRequestsException(10)
