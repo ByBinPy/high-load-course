@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -28,13 +30,13 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-
 @Configuration
 class PaymentAccountsConfig {
     companion object {
         private val javaClient = HttpClient.newBuilder().build()
         private val mapper = ObjectMapper().registerKotlinModule().registerModules(JavaTimeModule())
     }
+    val logger: Logger = LoggerFactory.getLogger(PaymentAccountsConfig::class.java)
 
     var rateCheckWindow: Duration = Duration.ofMillis(1000)
 
@@ -54,48 +56,60 @@ class PaymentAccountsConfig {
     fun warehouseIfUnfinishedWork(
         accountProperties: List<PaymentAccountProperties>,
     ): ThreadPoolExecutor {
-        val poolSize = 100
-        val temp = ThreadPoolExecutor(
-            poolSize,
-            poolSize,
+        val corePoolSize = 100
+        val maximumPoolSize = 100
+        val queueSize = 50_000
+        val keepAliveTime = 0
+        logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
+        return ThreadPoolExecutor(
+            corePoolSize,
+            maximumPoolSize,
             0,
             TimeUnit.MILLISECONDS,
             LinkedBlockingQueue(50_000),
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
-        return temp
     }
 
     @Bean
     fun parallelLimiter(
         accountProperties: List<PaymentAccountProperties>
-    ): Semaphore =
-        Semaphore(accountProperties.minOf { it.parallelRequests })
+    ): Semaphore {
+        val parallelRequests = accountProperties.minOf { it.parallelRequests }
+        logger.info("Semaphore Properties: permits count - {}", parallelRequests)
+        return Semaphore(parallelRequests)
+    }
 
     @Bean
     fun burstRateLimiter(
         accountProperties: List<PaymentAccountProperties>,
         @Value("#{'\${payment.processingTimeMillis}'.split(',')}")
         processingTimeMillis: Int
-    ): LeakingBucketRateLimiter =
-        LeakingBucketRateLimiter(
-            rate = accountProperties.minOf { it.rateLimitPerSec }.toLong(),
+    ): LeakingBucketRateLimiter {
+        val bucketSize = (((processingTimeMillis - accountProperties.maxOf { it.averageProcessingTime }
+            .toMillis()) / accountProperties.maxOf { it.averageProcessingTime }
+            .toMillis()) * accountProperties.minOf { it.rateLimitPerSec }.toLong()).toInt()
+        val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
+        logger.info("Burst Rate Limiter Properties: bucket size - {}, rate - {}", bucketSize, rate)
+        return LeakingBucketRateLimiter(
+            rate = rate,
             window = rateCheckWindow,
-            bucketSize = (((processingTimeMillis - accountProperties.maxOf { it.averageProcessingTime }
-                .toMillis()) / accountProperties.maxOf { it.averageProcessingTime }
-                .toMillis()) * accountProperties.minOf { it.rateLimitPerSec }.toLong()).toInt()
+            bucketSize = bucketSize
         )
+    }
 
     @Bean
     fun smoothOutIncoming(
         accountProperties: List<PaymentAccountProperties>,
-    ): SlidingWindowRateLimiter =
-        SlidingWindowRateLimiter(
-            rate = accountProperties.minOf { it.rateLimitPerSec }.toLong(),
+    ): SlidingWindowRateLimiter {
+        val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
+        logger.info("Incoming Rate Limiter Properties: rate - {}", rate)
+        return SlidingWindowRateLimiter(
+            rate = rate,
             window = rateCheckWindow,
         )
-
+    }
 
     @Bean
     fun accountProperties(): List<PaymentAccountProperties> {
