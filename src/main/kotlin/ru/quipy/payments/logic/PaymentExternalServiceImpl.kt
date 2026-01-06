@@ -121,7 +121,8 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         val timeBeforeCall = now()
         parallelLimiter.acquire()
-        if (rateLimiter.tickBlocking(timeout = deadline - now() - time_95_percentile)) {
+        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time_95_percentile)) {
+            parallelLimiter.release()
             throw TooManyRequestsException(10)
         }
         startedRequests.increment()
