@@ -94,8 +94,6 @@ class PaymentExternalSystemAdapterImpl(
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, "not enough time")
             }
-            val retryAfterMs = minRequiredTime - remaining + Random.nextLong(100)
-            throw TooManyRequestsException(retryAfterMs)
         }
 
         val requestTimeout = minOf(
