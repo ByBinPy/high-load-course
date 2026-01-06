@@ -206,11 +206,11 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID, deadline: Long, delay: Long
     ) {
         requestsRetried.increment()
-        retryExecutor.scheduleWithFixedDelay({
-            while (!rateLimiter.tick() && now() < deadline) {
-            }
-            if (now() >= deadline)
+        retryExecutor.schedule({
+
+            if (rateLimiter.tickBlocking(timeout = deadline - now() - time_95_percentile)) {
                 throw TooManyRequestsException(10)
+            }
 
             logger.info("Completing retry. All retry count - {}", requestsRetried.count())
             val remainingTime = deadline - now()
@@ -231,7 +231,7 @@ class PaymentExternalSystemAdapterImpl(
                     .build()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
             }
-        }, 0, delay, TimeUnit.MILLISECONDS)
+        }, delay, TimeUnit.MILLISECONDS)
     }
 }
 
