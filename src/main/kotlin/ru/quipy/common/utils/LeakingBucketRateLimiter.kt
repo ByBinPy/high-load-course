@@ -26,7 +26,7 @@ class LeakingBucketRateLimiter(
     fun tickBlocking(timeout: Long): Boolean {
         val startedAt = now()
         var checkBlocking = tick()
-        while (now() - startedAt < timeout && checkBlocking) {
+        while (now() - startedAt < timeout && !checkBlocking) {
             checkBlocking = tick()
         }
         return checkBlocking
