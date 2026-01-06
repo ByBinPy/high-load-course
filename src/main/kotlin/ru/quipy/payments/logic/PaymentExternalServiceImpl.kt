@@ -3,12 +3,13 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
-import okio.EOFException
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
+import java.io.EOFException
+import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.net.URI
@@ -96,14 +97,9 @@ class PaymentExternalSystemAdapterImpl(
             }
         }
 
-        val requestTimeout = minOf(
-            time_95_percentile,
-            requestAverageProcessingTime.toMillis()
-        ).coerceAtLeast(100)
-
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(Duration.ofMillis(requestTimeout))
+            .timeout(Duration.ofMillis(time_95_percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
@@ -125,6 +121,9 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         val timeBeforeCall = now()
         parallelLimiter.acquire()
+        if (rateLimiter.tickBlocking(timeout = deadline - now() - time_95_percentile)) {
+            throw TooManyRequestsException(10)
+        }
         startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
@@ -143,6 +142,10 @@ class PaymentExternalSystemAdapterImpl(
 
                             is EOFException -> {
                                 logger.warn("[$accountName] eof exception in: $paymentId", e)
+                            }
+
+                            is IOException -> {
+                                logger.warn("[$accountName] received stream exception in: $paymentId", e)
                             }
 
                             else -> {
@@ -207,11 +210,6 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         requestsRetried.increment()
         retryExecutor.schedule({
-
-            if (rateLimiter.tickBlocking(timeout = deadline - now() - time_95_percentile)) {
-                throw TooManyRequestsException(10)
-            }
-
             logger.info("Completing retry. All retry count - {}", requestsRetried.count())
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
