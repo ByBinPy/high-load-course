@@ -1,5 +1,6 @@
 package ru.quipy.orders.subscribers
 
+import io.micrometer.core.instrument.Metrics
 import jakarta.annotation.PostConstruct
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -19,6 +20,7 @@ class PaymentSubscriber {
 
     val logger: Logger = LoggerFactory.getLogger(PaymentSubscriber::class.java)
 
+    val paymentSucceededCounter = Metrics.counter("succeeded.payments", "account", "acc-7")
 
     @Autowired
     lateinit var subscriptionsManager: AggregateSubscriptionsManager
@@ -34,7 +36,7 @@ class PaymentSubscriber {
             retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)
         ) {
             `when`(PaymentProcessedEvent::class) { event ->
-                appExecutor.submit {
+                appExecutor.run {
                     logger.trace(
                         "Payment results. OrderId ${event.orderId}, succeeded: ${event.success}, txId: ${event.transactionId}, reason: ${event.reason}, duration: ${
                             Duration.ofMillis(
@@ -42,6 +44,7 @@ class PaymentSubscriber {
                             ).toSeconds()
                         }, spent in queue: ${event.spentInQueueDuration.toSeconds()}"
                     )
+                    paymentSucceededCounter.increment()
                 }
             }
         }
