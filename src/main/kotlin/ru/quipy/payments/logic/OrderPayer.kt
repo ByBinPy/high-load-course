@@ -23,11 +23,11 @@ class OrderPayer(val rateLimiter : SlidingWindowRateLimiter, meterRegistry: Mete
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
     }
 
-    private val plannedRequests = meterRegistry.counter("payment.processing.planned", "accountName", "acc-12")
+    private val plannedRequests = meterRegistry.counter("payment.processing.planned", "accountName", "acc-13")
 
     private val paymentExecutor = ThreadPoolExecutor(
-        3600,
-        3600,
+        4000,
+        4000,
         100L,
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(200_000),
