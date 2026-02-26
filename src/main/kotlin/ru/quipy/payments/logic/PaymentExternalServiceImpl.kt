@@ -20,7 +20,6 @@ import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
-import kotlin.math.log
 import kotlin.math.pow
 import kotlin.random.Random
 
@@ -40,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
-    private val time_95_percentile = 20_000
+    private val time_95_percentile = 1_000
 
 
 
@@ -98,14 +97,12 @@ class PaymentExternalSystemAdapterImpl(
             throw TooManyRequestsException(retryAfterMs)
         }
 
-        val requestTimeout = minOf(
-            time_95_percentile.toLong(),
-            requestAverageProcessingTime.toMillis()
-        ).coerceAtLeast(100)
+        // Таймаут = оставшееся время до дедлайна, но не больше time_95_percentile
+        val requestTimeout = minOf(remaining, time_95_percentile.toLong()).coerceAtLeast(100)
 
-        if (requestTimeout < requestAverageProcessingTime.toMillis()) {
-            logger.warn("[$accountName] Timeout too short for payment $paymentId: ${requestTimeout}ms")
-            val retryAfterMs = requestAverageProcessingTime.toMillis() - requestTimeout + Random.nextLong(100)
+        if (!rateLimiter.tick()) {
+            val retryAfterMs = (1000L / rateLimitPerSec * 10).coerceIn(10, 100) + Random.nextLong(10)
+            logger.warn("[$accountName] Rate limit exceeded for payment $paymentId, retry after ${retryAfterMs}ms")
             throw TooManyRequestsException(retryAfterMs)
         }
 

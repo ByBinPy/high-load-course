@@ -45,7 +45,7 @@ class PaymentAccountsConfig {
     @Bean
     fun rateLimit(): SlidingWindowRateLimiter {
         return SlidingWindowRateLimiter(
-            rate = 4000L,
+            rate = 5000L,
             window = Duration.ofMillis(1000),
         )
     }
