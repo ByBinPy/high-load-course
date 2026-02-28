@@ -39,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
 
-    private val time95Percentile = 200L
+    private val time95Percentile = 20L
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -51,16 +51,18 @@ class PaymentExternalSystemAdapterImpl(
         meterRegistry.gauge("payment.account.inflight.requests", listOf(Tag.of("accountName", properties.accountName)), inFlightRequests) { it.toDouble() }
         meterRegistry.gauge("payment.account.retry.requests", listOf(Tag.of("accountName", properties.accountName)), retryRequests) { it.toDouble() }
     }
+
+    private val processingTimeMillis = 1000L
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
     private val httpClient = HttpClient
         .newBuilder()
         .executor(Executors.newFixedThreadPool(parallelRequests))
         .version(HttpClient.Version.HTTP_2)
+        .connectTimeout(Duration.ofMillis(processingTimeMillis / 2))
         .build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         val transactionId = UUID.randomUUID()
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
@@ -74,13 +76,9 @@ class PaymentExternalSystemAdapterImpl(
                         Duration.ofMillis(now() - paymentStartedAt)
                     )
                 }
-                logger.info("[$accountName] Log submission recorded for $paymentId")
             } catch (e: Exception) {
                 logger.error("[$accountName] Failed to record log submission for $paymentId", e)
             }
-
-        logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             .timeout(Duration.ofMillis(time95Percentile))
@@ -106,27 +104,18 @@ class PaymentExternalSystemAdapterImpl(
         val timeBeforeCall = now()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
-                logger.info("On completion callback for payment: {}, retry count: {}, inFlight count: {}, in time: {}", paymentId, retryCount, inFlightRequests, now())
                     if (throwable != null) {
                         val e = throwable.cause
                         var isRetriable = true
                         when (throwable.cause) {
                             is SocketTimeoutException -> {
-                                logger.warn("[$accountName] attempt ${retryCount + 1} timeout: $paymentId", e)
                             }
-
                             is InterruptedIOException -> {
-                                logger.warn("[$accountName] interrupted: $paymentId", e)
                             }
-
                             is EOFException -> {
-                                logger.warn("[$accountName] eof exception in: $paymentId", e)
                             }
-
                             is IOException -> {
-                                logger.warn("[$accountName] received stream exception in: $paymentId", e)
                             }
-
                             else -> {
                                 logger.warn("[$accountName] io error: $paymentId", e)
                                 isRetriable = false
@@ -158,13 +147,6 @@ class PaymentExternalSystemAdapterImpl(
                         }
                     } else {
                         try {
-                            logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits())
-                            logger.info(
-                                "success in callback for payment: {}, retry count: {}, in time: {}",
-                                paymentId,
-                                retryCount,
-                                now()
-                            )
                             val rawBody = response.body()
                             val parsed = try {
                                 mapper.readValue(rawBody, ExternalSysResponse::class.java)
@@ -188,7 +170,6 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID, deadline: Long, delay: Long
     ) {
         retryExecutor.schedule({
-            logger.info("Completing retry. All retry count - {}", retryRequests )
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
                 try {

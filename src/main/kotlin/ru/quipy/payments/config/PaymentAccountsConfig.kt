@@ -70,10 +70,6 @@ class PaymentAccountsConfig {
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
-
-        meterRegistry.gauge("payment.executor.active.tasks", executor) { it.activeCount.toDouble() }
-        meterRegistry.gauge("payment.executor.queue.size", executor) { it.queue.size.toDouble() }
-
         return executor
     }
 
