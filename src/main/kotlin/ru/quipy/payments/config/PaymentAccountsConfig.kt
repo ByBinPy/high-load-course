@@ -56,9 +56,9 @@ class PaymentAccountsConfig {
         accountProperties: List<PaymentAccountProperties>,
         meterRegistry: io.micrometer.core.instrument.MeterRegistry,
     ): ThreadPoolExecutor {
-        val corePoolSize = 100
-        val maximumPoolSize = 100
-        val queueSize = 50_000
+        val corePoolSize = 1000
+        val maximumPoolSize = 1000
+        val queueSize = 100_000
         val keepAliveTime = 0
         logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
         val executor = ThreadPoolExecutor(
@@ -66,7 +66,7 @@ class PaymentAccountsConfig {
             maximumPoolSize,
             0,
             TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue(50_000),
+            LinkedBlockingQueue(100_000),
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )

@@ -8,7 +8,6 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
-import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.EOFException
 import java.io.IOException
@@ -40,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
 
-    private val time95Percentile = 20_000L
+    private val time95Percentile = 200L
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -105,17 +104,9 @@ class PaymentExternalSystemAdapterImpl(
         deadline: Long
     ) {
         val timeBeforeCall = now()
-        parallelLimiter.acquire()
-        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
-            parallelLimiter.release()
-            throw TooManyRequestsException(10)
-        }
-        inFlightRequests.incrementAndGet()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                 logger.info("On completion callback for payment: {}, retry count: {}, inFlight count: {}, in time: {}", paymentId, retryCount, inFlightRequests, now())
-                parallelLimiter.release()
-                inFlightRequests.decrementAndGet()
                     if (throwable != null) {
                         val e = throwable.cause
                         var isRetriable = true
@@ -196,7 +187,6 @@ class PaymentExternalSystemAdapterImpl(
         retryCount: Long, request: HttpRequest, paymentId: UUID,
         transactionId: UUID, deadline: Long, delay: Long
     ) {
-        retryRequests.incrementAndGet()
         retryExecutor.schedule({
             logger.info("Completing retry. All retry count - {}", retryRequests )
             val remainingTime = deadline - now()
@@ -217,7 +207,6 @@ class PaymentExternalSystemAdapterImpl(
                     .build()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
             }
-            retryRequests.decrementAndGet()
         }, delay, TimeUnit.MILLISECONDS)
     }
 

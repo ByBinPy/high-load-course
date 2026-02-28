@@ -11,7 +11,6 @@ import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
 import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
 
 @Service
 class OrderPayer(
@@ -47,7 +46,6 @@ class OrderPayer(
             logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-            inExecTimer.record(now() - createdAt, TimeUnit.MILLISECONDS)
         }
         return createdAt
     }

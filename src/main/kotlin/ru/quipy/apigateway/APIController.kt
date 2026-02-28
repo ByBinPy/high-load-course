@@ -5,7 +5,6 @@ import io.micrometer.core.instrument.Tag
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.web.bind.annotation.*
-import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import ru.quipy.payments.logic.PaymentAccountProperties
@@ -16,7 +15,6 @@ import java.util.concurrent.atomic.AtomicInteger
 class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
-    private val rateLimiter: LeakingBucketRateLimiter,
     meterRegistry: MeterRegistry,
     accountProperties: List<PaymentAccountProperties>
 ) {
