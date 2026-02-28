@@ -3,7 +3,6 @@ package ru.quipy.payments.config
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import io.micrometer.core.instrument.MeterRegistry
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -55,13 +54,14 @@ class PaymentAccountsConfig {
     @Bean
     fun warehouseIfUnfinishedWork(
         accountProperties: List<PaymentAccountProperties>,
+        meterRegistry: io.micrometer.core.instrument.MeterRegistry,
     ): ThreadPoolExecutor {
         val corePoolSize = 100
         val maximumPoolSize = 100
         val queueSize = 50_000
         val keepAliveTime = 0
         logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
-        return ThreadPoolExecutor(
+        val executor = ThreadPoolExecutor(
             corePoolSize,
             maximumPoolSize,
             0,
@@ -70,6 +70,11 @@ class PaymentAccountsConfig {
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
+
+        meterRegistry.gauge("payment.executor.active.tasks", executor) { it.activeCount.toDouble() }
+        meterRegistry.gauge("payment.executor.queue.size", executor) { it.queue.size.toDouble() }
+
+        return executor
     }
 
     @Bean
@@ -135,7 +140,7 @@ class PaymentAccountsConfig {
     @Bean
     fun accountAdapters(
         paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
-        meterRegistry: MeterRegistry,
+        meterRegistry: io.micrometer.core.instrument.MeterRegistry,
         accountProperties: List<PaymentAccountProperties>,
         rateLimiter: SlidingWindowRateLimiter
     ): List<PaymentExternalSystemAdapter> {

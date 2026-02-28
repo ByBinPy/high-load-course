@@ -171,6 +171,7 @@
                 <configuration>
                     <args>
                         <arg>-Xjsr305=strict</arg>
+                        <arg>-Xannotation-default-target=param-property</arg>
                     </args>
                     <compilerPlugins>
                         <plugin>spring</plugin>
