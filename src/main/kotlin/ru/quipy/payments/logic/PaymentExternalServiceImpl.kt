@@ -39,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
 
-    private val time95Percentile = 100L
+    private val time95Percentile = 1000L
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -102,9 +102,14 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         deadline: Long
     ) {
+        inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
+                inFlightRequests.decrementAndGet()
+                if (retryCount > 0) {
+                    retryRequests.decrementAndGet()
+                }
                 timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                 if (throwable != null) {
                         val e = throwable.cause
@@ -137,6 +142,7 @@ class PaymentExternalSystemAdapterImpl(
                                 }
                             } else {
                                 if (isRetriable) {
+                                    retryRequests.incrementAndGet()
                                     retryCounter.increment()
                                     scheduleRetry(
                                         retryCount, request, paymentId, transactionId, deadline, capped
@@ -174,6 +180,7 @@ class PaymentExternalSystemAdapterImpl(
         retryExecutor.schedule({
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
+                retryRequests.decrementAndGet()
                 try {
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, "Not enough time for retry")
