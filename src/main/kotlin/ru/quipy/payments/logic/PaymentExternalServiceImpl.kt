@@ -39,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
 
-    private val time95Percentile = 20L
+    private val time95Percentile = 100L
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -54,6 +54,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val processingTimeMillis = 1000L
     private val timer = meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
+    private val retryCounter = meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
     private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
     private val httpClient = HttpClient
         .newBuilder()
@@ -104,7 +105,8 @@ class PaymentExternalSystemAdapterImpl(
         val timeBeforeCall = now()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
-                    if (throwable != null) {
+                timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
+                if (throwable != null) {
                         val e = throwable.cause
                         var isRetriable = true
                         when (throwable.cause) {
@@ -135,6 +137,7 @@ class PaymentExternalSystemAdapterImpl(
                                 }
                             } else {
                                 if (isRetriable) {
+                                    retryCounter.increment()
                                     scheduleRetry(
                                         retryCount, request, paymentId, transactionId, deadline, capped
                                     )
@@ -157,7 +160,6 @@ class PaymentExternalSystemAdapterImpl(
                             paymentESService.update(paymentId) {
                                 it.logProcessing(parsed.result, now(), transactionId, parsed.message)
                             }
-                            timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                         } catch (e: Exception) {
                             logger.error("[$accountName] Error processing payment $paymentId", e)
                         }

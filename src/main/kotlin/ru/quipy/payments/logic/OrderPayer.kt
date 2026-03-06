@@ -1,5 +1,6 @@
 package ru.quipy.payments.logic
 
+import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -11,6 +12,7 @@ import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
 import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 @Service
 class OrderPayer(
@@ -27,6 +29,10 @@ class OrderPayer(
 
     val inExecTimer = meterRegistry.timer("order.payer.exec.latency", "accountName", accountProperties.joinToString { it.accountName + " " })
 
+    private val plannedCounter: Counter = meterRegistry.counter("payment.processing.planned")
+    private val startedCounter: Counter = meterRegistry.counter("payment.processing.started")
+    private val completedCounter: Counter = meterRegistry.counter("payment.processing.completed")
+
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
@@ -35,15 +41,22 @@ class OrderPayer(
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
+        plannedCounter.increment()
         paymentExecutor.submit {
-            val createdEvent = paymentESService.create {
-                it.create(
-                    paymentId,
-                    orderId,
-                    amount
-                )
+            startedCounter.increment()
+            try {
+                val createdEvent = paymentESService.create {
+                    it.create(
+                        paymentId,
+                        orderId,
+                        amount
+                    )
+                }
+                inExecTimer.record(now()-createdAt, TimeUnit.MILLISECONDS)
+                paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+            } finally {
+                completedCounter.increment()
             }
-            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
         return createdAt
     }
