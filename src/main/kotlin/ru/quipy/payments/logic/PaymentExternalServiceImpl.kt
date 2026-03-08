@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Tag
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -72,9 +73,9 @@ class PaymentExternalSystemAdapterImpl(
     private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
     private val httpClient = HttpClient
         .newBuilder()
-        .executor(Executors.newFixedThreadPool(10_000_000))
+        .executor(Executors.newFixedThreadPool(parallelRequests))
         .version(HttpClient.Version.HTTP_2)
-        //.connectTimeout(Duration.ofMillis(processingTimeMillis / 2))
+        .connectTimeout(Duration.ofMillis(processingTimeMillis / 2))
         .build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -84,14 +85,14 @@ class PaymentExternalSystemAdapterImpl(
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         try {
             scope.launch {
-                paymentESService.update(paymentId) {
-                    it.logSubmission(
-                        success = true,
-                        transactionId,
-                        now(),
-                        Duration.ofMillis(now() - paymentStartedAt)
-                    )
-                }
+                    paymentESService.update(paymentId) {
+                        it.logSubmission(
+                            success = true,
+                            transactionId,
+                            now(),
+                            Duration.ofMillis(now() - paymentStartedAt)
+                        )
+                    }
             }
         } catch (e: Exception) {
             logger.error("[$accountName] Failed to record log submission for $paymentId", e)
@@ -152,6 +153,7 @@ class PaymentExternalSystemAdapterImpl(
 
                     if (retryCount + 1 >= 3) {
                         scope.launch {
+                            updateWithRetry(paymentId, false, now(), "Max attempts reached")
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
                             }
@@ -161,9 +163,7 @@ class PaymentExternalSystemAdapterImpl(
                         val capped = backoff.coerceAtMost(deadline - now() - 5)
                         if (capped <= 0) {
                             scope.launch {
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(false, now(), transactionId, "Deadline expired")
-                                }
+                              updateWithRetry(paymentId, false, now(), "Deadline exceeded, no time for retry")
                             }
                         } else {
                             if (isRetriable) {
@@ -174,9 +174,7 @@ class PaymentExternalSystemAdapterImpl(
                                 )
                             } else {
                                 scope.launch {
-                                    paymentESService.update(paymentId) {
-                                        it.logProcessing(false, now(), transactionId, "Non-retriable exception")
-                                    }
+                                    updateWithRetry(paymentId, false, now(), "Non-retriable exception")
                                 }
                             }
                         }
@@ -189,11 +187,8 @@ class PaymentExternalSystemAdapterImpl(
                         } catch (ex: Exception) {
                             ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
                         }
-
                         scope.launch {
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(parsed.result, now(), transactionId, parsed.message)
-                            }
+                            updateWithRetry(paymentId, parsed.result, now(), parsed.message ?: "No message")
                         }
                     } catch (e: Exception) {
                         logger.error("[$accountName] Error processing payment $paymentId", e)
@@ -212,9 +207,7 @@ class PaymentExternalSystemAdapterImpl(
                 retryRequests.decrementAndGet()
                 try {
                     scope.launch {
-                        paymentESService.update(paymentId) {
-                            it.logProcessing(false, now(), transactionId, "Not enough time for retry")
-                        }
+                        updateWithRetry(paymentId, false, now(), "Not enough time for retry")
                     }
                 } catch (e: Exception) {
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
@@ -230,6 +223,28 @@ class PaymentExternalSystemAdapterImpl(
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
             }
         }, delay, TimeUnit.MILLISECONDS)
+    }
+
+    private suspend fun updateWithRetry(
+        paymentId: UUID,
+        result: Boolean,
+        processedAt: Long,
+        reason: String,
+        maxAttempts: Int = 5,
+    ) {
+        repeat(maxAttempts) { attempt ->
+            try {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(result, processedAt, paymentId, reason)
+                }
+            } catch (_: Exception) {
+                if (attempt == maxAttempts - 1) {
+                    return
+                }
+                val delay = (10L * (attempt + 1)) + Random.nextLong(5)
+                delay(delay)
+            }
+        }
     }
 
     companion object {
