@@ -6,7 +6,6 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Tag
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -158,18 +157,15 @@ class PaymentExternalSystemAdapterImpl(
                     }
 
                     if (retryCount + 1 >= 3) {
-                        scope.launch {
-                            updateWithRetry(paymentId, false, now(), "Max attempts reached")
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, "Max attempts reached")
                             }
-                        }
                     } else {
                         val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + Random.nextLong(10))
                         val capped = backoff.coerceAtMost(deadline - now() - 5)
                         if (capped <= 0) {
-                            scope.launch {
-                                updateWithRetry(paymentId, false, now(), "Deadline exceeded, no time for retry")
+                            paymentESService.update(paymentId) {
+                                it.logProcessing(false, now(), transactionId, "Deadline expired")
                             }
                         } else {
                             if (isRetriable) {
@@ -179,8 +175,8 @@ class PaymentExternalSystemAdapterImpl(
                                     retryCount, request, paymentId, transactionId, deadline, capped
                                 )
                             } else {
-                                scope.launch {
-                                    updateWithRetry(paymentId, false, now(), "Non-retriable exception")
+                                paymentESService.update(paymentId) {
+                                    it.logProcessing(false, now(), transactionId, "Non-retriable exception")
                                 }
                             }
                         }
@@ -193,8 +189,8 @@ class PaymentExternalSystemAdapterImpl(
                         } catch (ex: Exception) {
                             ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
                         }
-                        scope.launch {
-                            updateWithRetry(paymentId, parsed.result, now(), parsed.message ?: "No message")
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(parsed.result, now(), transactionId, parsed.message)
                         }
                     } catch (e: Exception) {
                         logger.error("[$accountName] Error processing payment $paymentId", e)
@@ -212,8 +208,13 @@ class PaymentExternalSystemAdapterImpl(
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
                 retryRequests.decrementAndGet()
                 try {
-                    scope.launch {
-                        updateWithRetry(paymentId, false, now(), "Not enough time for retry")
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(
+                            false,
+                            now(),
+                            transactionId,
+                            "Not enough time for retry"
+                        )
                     }
                 } catch (e: Exception) {
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
@@ -231,27 +232,6 @@ class PaymentExternalSystemAdapterImpl(
         }, delay, TimeUnit.MILLISECONDS)
     }
 
-    private suspend fun updateWithRetry(
-        paymentId: UUID,
-        result: Boolean,
-        processedAt: Long,
-        reason: String,
-        maxAttempts: Int = 5,
-    ) {
-        repeat(maxAttempts) { attempt ->
-            try {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(result, processedAt, paymentId, reason)
-                }
-            } catch (_: Exception) {
-                if (attempt == maxAttempts - 1) {
-                    return
-                }
-                val delay = (10L * (attempt + 1)) + Random.nextLong(5)
-                delay(delay)
-            }
-        }
-    }
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
