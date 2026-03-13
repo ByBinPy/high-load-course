@@ -66,7 +66,7 @@ class PaymentAccountsConfig {
             maximumPoolSize,
             0,
             TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue(100_000),
+            LinkedBlockingQueue(queueSize),
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
