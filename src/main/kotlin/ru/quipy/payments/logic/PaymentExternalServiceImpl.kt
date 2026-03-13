@@ -45,7 +45,7 @@ class PaymentExternalSystemAdapterImpl(
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val time95Percentile = 40
+    private val time95Percentile = 40L
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
     private val inFlightRequests = AtomicInteger(0)
@@ -119,7 +119,7 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
-        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
+        if (!rateLimiter.tickBlocking(time95Percentile)) {
             parallelLimiter.release()
             throw TooManyRequestsException(10)
         }
@@ -217,10 +217,10 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
                 }
             } else {
-                //val newRequestTimeout = remainingTime.coerceIn(time95Percentile, requestAverageProcessingTime.toMillis() * 2)
+                val newRequestTimeout = remainingTime.coerceIn(time95Percentile, requestAverageProcessingTime.toMillis() * 2)
                 val newRequest = HttpRequest.newBuilder()
                     .uri(request.uri())
-                    //.timeout(Duration.ofMillis(newRequestTimeout))
+                    .timeout(Duration.ofMillis(50))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
                 parallelLimiter.acquire()
