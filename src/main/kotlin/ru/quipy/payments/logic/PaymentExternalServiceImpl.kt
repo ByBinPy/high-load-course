@@ -67,7 +67,7 @@ class PaymentExternalSystemAdapterImpl(
         ) { it.toDouble() }
     }
 
-    private val processingTimeMillis = 1000L
+    private val processingTimeMillis = 1500L
     private val timer =
         meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val retryCounter =
@@ -123,10 +123,10 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
-        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
-            parallelLimiter.release()
-            throw TooManyRequestsException(10)
-        }
+//        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
+//            parallelLimiter.release()
+//            throw TooManyRequestsException(10)
+//        }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                 parallelLimiter.release()
