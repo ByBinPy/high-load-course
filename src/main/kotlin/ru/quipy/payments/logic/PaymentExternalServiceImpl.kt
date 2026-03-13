@@ -12,6 +12,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
+import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.EOFException
 import java.io.IOException
@@ -46,6 +47,7 @@ class PaymentExternalSystemAdapterImpl(
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
+    private val time95Percentile = 40;
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
     private val inFlightRequests = AtomicInteger(0)
@@ -85,14 +87,14 @@ class PaymentExternalSystemAdapterImpl(
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         try {
             scope.launch {
-                    paymentESService.update(paymentId) {
-                        it.logSubmission(
-                            success = true,
-                            transactionId,
-                            now(),
-                            Duration.ofMillis(now() - paymentStartedAt)
-                        )
-                    }
+                paymentESService.update(paymentId) {
+                    it.logSubmission(
+                        success = true,
+                        transactionId,
+                        now(),
+                        Duration.ofMillis(now() - paymentStartedAt)
+                    )
+                }
             }
         } catch (e: Exception) {
             logger.error("[$accountName] Failed to record log submission for $paymentId", e)
@@ -121,6 +123,10 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
+        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
+            parallelLimiter.release()
+            throw TooManyRequestsException(10)
+        }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                 parallelLimiter.release()
@@ -163,7 +169,7 @@ class PaymentExternalSystemAdapterImpl(
                         val capped = backoff.coerceAtMost(deadline - now() - 5)
                         if (capped <= 0) {
                             scope.launch {
-                              updateWithRetry(paymentId, false, now(), "Deadline exceeded, no time for retry")
+                                updateWithRetry(paymentId, false, now(), "Deadline exceeded, no time for retry")
                             }
                         } else {
                             if (isRetriable) {
