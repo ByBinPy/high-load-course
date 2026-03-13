@@ -56,8 +56,8 @@ class PaymentAccountsConfig {
         accountProperties: List<PaymentAccountProperties>,
         meterRegistry: io.micrometer.core.instrument.MeterRegistry,
     ): ThreadPoolExecutor {
-        val corePoolSize = 160
-        val maximumPoolSize = 160
+        val corePoolSize = 1000
+        val maximumPoolSize = 1000
         val queueSize = 100_000
         val keepAliveTime = 0
         logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
