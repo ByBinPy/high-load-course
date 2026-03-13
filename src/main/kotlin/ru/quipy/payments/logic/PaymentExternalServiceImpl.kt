@@ -220,7 +220,6 @@ class PaymentExternalSystemAdapterImpl(
                 val newRequestTimeout = remainingTime.coerceIn(time95Percentile, requestAverageProcessingTime.toMillis() * 2)
                 val newRequest = HttpRequest.newBuilder()
                     .uri(request.uri())
-                    .timeout(Duration.ofMillis(50))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
                 parallelLimiter.acquire()
