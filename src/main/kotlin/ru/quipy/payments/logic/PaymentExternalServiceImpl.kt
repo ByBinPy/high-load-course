@@ -6,7 +6,6 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Tag
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -46,7 +45,7 @@ class PaymentExternalSystemAdapterImpl(
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val time95Percentile = 40;
+    private val time95Percentile = 40
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
     private val inFlightRequests = AtomicInteger(0)
@@ -71,7 +70,7 @@ class PaymentExternalSystemAdapterImpl(
         meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val retryCounter =
         meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
-    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
+    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(10)
     private val httpClient = HttpClient
         .newBuilder()
         .executor(Executors.newFixedThreadPool(parallelRequests))
@@ -85,15 +84,13 @@ class PaymentExternalSystemAdapterImpl(
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         try {
-            scope.launch {
-                paymentESService.update(paymentId) {
+            paymentESService.update(paymentId) {
                     it.logSubmission(
                         success = true,
                         transactionId,
                         now(),
                         Duration.ofMillis(now() - paymentStartedAt)
                     )
-                }
             }
         } catch (e: Exception) {
             logger.error("[$accountName] Failed to record log submission for $paymentId", e)

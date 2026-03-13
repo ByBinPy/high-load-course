@@ -28,7 +28,7 @@ fun PaymentAggregateState.logProcessing(
     transactionId: UUID? = null,
     reason: String? = null
 ): PaymentProcessedEvent {
-    val submission  = this.submissions[transactionId ?: UUID.randomUUID()]
+    val submission = transactionId?.let { this.submissions[it] }
     val submittedAt = submission?.timeStarted ?: 0
     val spentInQueueDuration = submission?.spentInQueue ?: Duration.ofMillis(0)
     Metrics.timer("bombardier.in.queue.latency").record(spentInQueueDuration)
