@@ -18,16 +18,11 @@ class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
     meterRegistry: MeterRegistry,
-    accountProperties: List<PaymentAccountProperties>,
-    val rateLimiter: LeakingBucketRateLimiter
+    accountProperties: List<PaymentAccountProperties>
 ) {
 
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
-    val controllerRequests = AtomicInteger(0)
 
-    init {
-        meterRegistry.gauge("api.gateway.controller.requests", listOf(Tag.of("accountName", accountProperties.joinToString { it.accountName + " " })), controllerRequests) { it.toDouble() }
-    }
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -66,10 +61,7 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        controllerRequests.incrementAndGet()
-        if (!rateLimiter.tickBlocking(10)) {
-            throw TooManyRequestsException(10)
-        }
+
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))

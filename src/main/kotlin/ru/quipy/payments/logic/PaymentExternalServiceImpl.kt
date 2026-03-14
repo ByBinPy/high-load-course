@@ -39,9 +39,6 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
-    meterRegistry: MeterRegistry,
-    private val parallelLimiter: Semaphore,
-    private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
 
     private val serviceName = properties.serviceName
@@ -54,24 +51,7 @@ class PaymentExternalSystemAdapterImpl(
     private val retryRequests = AtomicInteger(0)
     private val scope = CoroutineScope(Dispatchers.Default)
 
-    init {
-        meterRegistry.gauge(
-            "payment.account.inflight.requests",
-            listOf(Tag.of("accountName", properties.accountName)),
-            inFlightRequests
-        ) { it.toDouble() }
-        meterRegistry.gauge(
-            "payment.account.retry.requests",
-            listOf(Tag.of("accountName", properties.accountName)),
-            retryRequests
-        ) { it.toDouble() }
-    }
-
-    private val processingTimeMillis = 1000L
-    private val timer =
-        meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
-    private val retryCounter =
-        meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
+    private val processingTimeMillis = 1500L
     private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
     private val httpClient = HttpClient
         .newBuilder()
@@ -104,7 +84,6 @@ class PaymentExternalSystemAdapterImpl(
             //.timeout(Duration.ofMillis(time95Percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
-        parallelLimiter.acquire()
         completeAction(0, request, paymentId, transactionId, deadline)
     }
 
@@ -123,18 +102,12 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
-        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
-            parallelLimiter.release()
-            throw TooManyRequestsException(10)
-        }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
-                parallelLimiter.release()
                 inFlightRequests.decrementAndGet()
                 if (retryCount > 0) {
                     retryRequests.decrementAndGet()
                 }
-                timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
                 if (throwable != null) {
                     val e = throwable.cause
                     var isRetriable = true
@@ -174,7 +147,6 @@ class PaymentExternalSystemAdapterImpl(
                         } else {
                             if (isRetriable) {
                                 retryRequests.incrementAndGet()
-                                retryCounter.increment()
                                 scheduleRetry(
                                     retryCount, request, paymentId, transactionId, deadline, capped
                                 )
@@ -225,7 +197,6 @@ class PaymentExternalSystemAdapterImpl(
                     //.timeout(Duration.ofMillis(newRequestTimeout))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
-                parallelLimiter.acquire()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)
             }
         }, delay, TimeUnit.MILLISECONDS)

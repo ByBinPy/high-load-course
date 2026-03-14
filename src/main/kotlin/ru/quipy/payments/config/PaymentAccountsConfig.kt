@@ -54,25 +54,21 @@ class PaymentAccountsConfig {
     @Bean
     fun warehouseIfUnfinishedWork(
         accountProperties: List<PaymentAccountProperties>,
-        meterRegistry: io.micrometer.core.instrument.MeterRegistry,
     ): ThreadPoolExecutor {
-        val corePoolSize = 1000
-        val maximumPoolSize = 1000
+        val corePoolSize = 100
+        val maximumPoolSize = 100
         val queueSize = 100_000
-        val keepAliveTime = 0
+        val keepAliveTime = 0L
         logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
         val executor = ThreadPoolExecutor(
             corePoolSize,
             maximumPoolSize,
-            0,
+            keepAliveTime,
             TimeUnit.MILLISECONDS,
             LinkedBlockingQueue(queueSize),
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
-
-        meterRegistry.gauge("payment.executor.active.tasks", executor) { it.activeCount.toDouble() }
-        meterRegistry.gauge("payment.executor.queue.size", executor) { it.queue.size.toDouble() }
 
         return executor
     }
@@ -86,23 +82,23 @@ class PaymentAccountsConfig {
         return Semaphore(parallelRequests)
     }
 
-    @Bean
-    fun burstRateLimiter(
-        accountProperties: List<PaymentAccountProperties>,
-        @Value("#{'\${payment.processingTimeMillis}'.split(',')}")
-        processingTimeMillis: Int
-    ): LeakingBucketRateLimiter {
-        val bucketSize = (((processingTimeMillis - accountProperties.maxOf { it.averageProcessingTime }
-            .toMillis()) / accountProperties.maxOf { it.averageProcessingTime }
-            .toMillis()) * accountProperties.minOf { it.rateLimitPerSec }.toLong()).toInt()
-        val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
-        logger.info("Burst Rate Limiter Properties: bucket size - {}, rate - {}", bucketSize, rate)
-        return LeakingBucketRateLimiter(
-            rate = rate,
-            window = rateCheckWindow,
-            bucketSize = bucketSize
-        )
-    }
+//    @Bean
+//    fun burstRateLimiter(
+//        accountProperties: List<PaymentAccountProperties>,
+//        @Value("#{'\${payment.processingTimeMillis}'.split(',')}")
+//        processingTimeMillis: Int
+//    ): LeakingBucketRateLimiter {
+//        val bucketSize = (((processingTimeMillis - accountProperties.maxOf { it.averageProcessingTime }
+//            .toMillis()) / accountProperties.maxOf { it.averageProcessingTime }
+//            .toMillis()) * accountProperties.minOf { it.rateLimitPerSec }.toLong()).toInt()
+//        val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
+//        logger.info("Burst Rate Limiter Properties: bucket size - {}, rate - {}", bucketSize, rate)
+//        return LeakingBucketRateLimiter(
+//            rate = rate,
+//            window = rateCheckWindow,
+//            bucketSize = bucketSize
+//        )
+//    }
 
     @Bean
     fun smoothOutIncoming(
@@ -152,10 +148,7 @@ class PaymentAccountsConfig {
                     it,
                     paymentService,
                     paymentProviderHostPort,
-                    token,
-                    meterRegistry,
-                    parallelLimiter(accountProperties),
-                    rateLimiter
+                    token
                 )
             }
     }
