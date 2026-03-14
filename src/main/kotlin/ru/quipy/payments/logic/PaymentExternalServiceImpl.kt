@@ -67,7 +67,7 @@ class PaymentExternalSystemAdapterImpl(
         ) { it.toDouble() }
     }
 
-    private val processingTimeMillis = 1500L
+    private val processingTimeMillis = 1000L
     private val timer =
         meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val retryCounter =

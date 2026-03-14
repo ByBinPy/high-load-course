@@ -30,8 +30,8 @@ Content-Type: application/json
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
   "ratePerSecond": 100,
-  "testCount": 5000,
-  "processingTimeMillis": 20000
+  "testCount": 20000,
+  "processingTimeMillis": 1500
 }
 
 
