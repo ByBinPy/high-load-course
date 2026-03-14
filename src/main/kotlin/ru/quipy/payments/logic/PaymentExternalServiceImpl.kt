@@ -3,6 +3,10 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Tag
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -22,6 +26,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.pow
 import kotlin.random.Random
 
@@ -36,30 +41,40 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelLimiter: Semaphore,
     private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
-    companion object {
-        val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        val mapper = ObjectMapper().registerKotlinModule()
-    }
 
-    private val time_95_percentile = 20_000L
-
-    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(properties.parallelRequests)
-
-    // 2025-11-20T20:30:35.780+03:00  INFO 56644 --- [alhost:1234/...] ru.quipy.core.EventSourcingService       : Optimistic lock exception. Failed to save event records id: [7dca693e-e811-4b7f-8bce-23e13d952c04-4]
     private val startedRequests =
         meterRegistry.counter("payment.processing.started", "accountName", properties.accountName)
     private val requestsRetried =
         meterRegistry.counter("payment.request.retried", "accountName", properties.accountName)
-    private val timer =
-        meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
+    private val processingTimeMillis = 1000L
+    private val time95Percentile = processingTimeMillis / 3
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
+    private val inFlightRequests = AtomicInteger(0)
+    private val retryRequests = AtomicInteger(0)
+    private val scope = CoroutineScope(Dispatchers.Default)
 
+    init {
+        meterRegistry.gauge(
+            "payment.account.inflight.requests",
+            listOf(Tag.of("accountName", properties.accountName)),
+            inFlightRequests
+        ) { it.toDouble() }
+        meterRegistry.gauge(
+            "payment.account.retry.requests",
+            listOf(Tag.of("accountName", properties.accountName)),
+            retryRequests
+        ) { it.toDouble() }
+    }
 
-
+    private val timer =
+        meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
+    private val retryCounter =
+        meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
+    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(10)
     private val httpClient = HttpClient
         .newBuilder()
         .executor(Executors.newFixedThreadPool(parallelRequests))
@@ -72,19 +87,19 @@ class PaymentExternalSystemAdapterImpl(
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-            try {
-                paymentESService.update(paymentId) {
-                    it.logSubmission(
-                        success = true,
-                        transactionId,
-                        now(),
-                        Duration.ofMillis(now() - paymentStartedAt)
-                    )
-                }
-                logger.info("[$accountName] Log submission recorded for $paymentId")
-            } catch (e: Exception) {
-                logger.error("[$accountName] Failed to record log submission for $paymentId", e)
-            }
+//            try {
+//                paymentESService.update(paymentId) {
+//                    it.logSubmission(
+//                        success = true,
+//                        transactionId,
+//                        now(),
+//                        Duration.ofMillis(now() - paymentStartedAt)
+//                    )
+//                }
+//                logger.info("[$accountName] Log submission recorded for $paymentId")
+//            } catch (e: Exception) {
+//                logger.error("[$accountName] Failed to record log submission for $paymentId", e)
+//            }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
@@ -99,7 +114,7 @@ class PaymentExternalSystemAdapterImpl(
 
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(Duration.ofMillis(time_95_percentile))
+            .timeout(Duration.ofMillis(time95Percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
@@ -119,9 +134,10 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         deadline: Long
     ) {
+        inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
         parallelLimiter.acquire()
-        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time_95_percentile)) {
+        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
             parallelLimiter.release()
             throw TooManyRequestsException(10)
         }
@@ -222,7 +238,7 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
                 }
             } else {
-                val newRequestTimeout = remainingTime.coerceIn(time_95_percentile, requestAverageProcessingTime.toMillis() * 2)
+                val newRequestTimeout = remainingTime.coerceIn(time95Percentile, requestAverageProcessingTime.toMillis() * 2)
                 val newRequest = HttpRequest.newBuilder()
                     .uri(request.uri())
                     .timeout(Duration.ofMillis(newRequestTimeout))
@@ -232,6 +248,13 @@ class PaymentExternalSystemAdapterImpl(
             }
         }, delay, TimeUnit.MILLISECONDS)
     }
+
+
+    companion object {
+        val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
+        val mapper = ObjectMapper().registerKotlinModule()
+    }
 }
+
 
 fun now() = System.currentTimeMillis()
