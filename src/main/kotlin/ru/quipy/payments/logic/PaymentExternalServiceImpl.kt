@@ -37,7 +37,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentProviderHostPort: String,
     private val token: String,
     meterRegistry: MeterRegistry,
-    private val parallelLimiter: Semaphore,
+    //private val parallelLimiter: Semaphore,
     private val rateLimiter: SlidingWindowRateLimiter
 ) : PaymentExternalSystemAdapter {
 
@@ -104,17 +104,17 @@ class PaymentExternalSystemAdapterImpl(
 
         val remaining = deadline - now()
         val minRequiredTime = requestAverageProcessingTime.toMillis()
-        if (remaining < minRequiredTime) {
-            logger.warn("[$accountName] Not enough time for payment $paymentId: ${remaining}ms remaining, need ${minRequiredTime}ms")
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, "not enough time")
-            }
-            return
-        }
+//        if (remaining < minRequiredTime) {
+//            logger.warn("[$accountName] Not enough time for payment $paymentId: ${remaining}ms remaining, need ${minRequiredTime}ms")
+//            paymentESService.update(paymentId) {
+//                it.logProcessing(false, now(), transactionId, "not enough time")
+//            }
+//            return
+//        }
 
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            .timeout(Duration.ofMillis(time95Percentile))
+            //.timeout(Duration.ofMillis(time95Percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
         completeAction(0, request, paymentId, transactionId, deadline)
@@ -133,13 +133,13 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         deadline: Long
     ) {
-        parallelLimiter.acquire()
+        //parallelLimiter.acquire()
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
         startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
-                parallelLimiter.release()
+                //parallelLimiter.release()
                     if (throwable != null) {
                         val e = throwable.cause
                         var isRetriable = true
@@ -191,7 +191,7 @@ class PaymentExternalSystemAdapterImpl(
                         }
                     } else {
                         try {
-                            logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits())
+                            //logger.warn("Free space in semaphore: {}", parallelLimiter.availablePermits())
                             logger.info(
                                 "success in callback for payment: {}, retry count: {}, in time: {}",
                                 paymentId,
@@ -225,19 +225,19 @@ class PaymentExternalSystemAdapterImpl(
             logger.info("Completing retry. All retry count - {}", requestsRetried.count())
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
-                try {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, "Not enough time for retry")
-                    }
-                    return@schedule
-                } catch (e: Exception) {
-                    logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
-                }
+//                try {
+//                    paymentESService.update(paymentId) {
+//                        it.logProcessing(false, now(), transactionId, "Not enough time for retry")
+//                    }
+//                    return@schedule
+//                } catch (e: Exception) {
+//                    logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
+//                }
             } else {
                 val newRequestTimeout = remainingTime.coerceIn(time95Percentile, requestAverageProcessingTime.toMillis() * 2)
                 val newRequest = HttpRequest.newBuilder()
                     .uri(request.uri())
-                    .timeout(Duration.ofMillis(newRequestTimeout))
+                    //.timeout(Duration.ofMillis(newRequestTimeout))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)

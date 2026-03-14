@@ -55,19 +55,19 @@ class PaymentAccountsConfig {
     @Bean
     fun warehouseIfUnfinishedWork(
         accountProperties: List<PaymentAccountProperties>,
-        meterRegistry: io.micrometer.core.instrument.MeterRegistry,
+        meterRegistry: MeterRegistry,
     ): ThreadPoolExecutor {
-        val corePoolSize = 1000
-        val maximumPoolSize = 1000
+        val corePoolSize = 100
+        val maximumPoolSize = 100
         val queueSize = 100_000
-        val keepAliveTime = 0
+        val keepAliveTime = 1000L
         logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
         val executor = ThreadPoolExecutor(
             corePoolSize,
             maximumPoolSize,
-            0,
+            keepAliveTime,
             TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue(50_000),
+            LinkedBlockingQueue(queueSize),
             NamedThreadFactory("payment-submission-executor"),
             CallerBlockingRejectedExecutionHandler()
         )
@@ -155,7 +155,7 @@ class PaymentAccountsConfig {
                     paymentProviderHostPort,
                     token,
                     meterRegistry,
-                    parallelLimiter(accountProperties),
+                    //parallelLimiter(accountProperties),
                     rateLimiter
                 )
             }
