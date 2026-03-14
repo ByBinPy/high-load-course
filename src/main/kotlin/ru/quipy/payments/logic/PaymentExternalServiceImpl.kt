@@ -45,7 +45,7 @@ class PaymentExternalSystemAdapterImpl(
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val time95Percentile = 40L
+    private val time95Percentile = 100L
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
     private val inFlightRequests = AtomicInteger(0)
@@ -83,18 +83,18 @@ class PaymentExternalSystemAdapterImpl(
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-        try {
-            paymentESService.update(paymentId) {
-                    it.logSubmission(
-                        success = true,
-                        transactionId,
-                        now(),
-                        Duration.ofMillis(now() - paymentStartedAt)
-                    )
-            }
-        } catch (e: Exception) {
-            logger.error("[$accountName] Failed to record log submission for $paymentId", e)
-        }
+//        try {
+//            paymentESService.update(paymentId) {
+//                    it.logSubmission(
+//                        success = true,
+//                        transactionId,
+//                        now(),
+//                        Duration.ofMillis(now() - paymentStartedAt)
+//                    )
+//            }
+//        } catch (e: Exception) {
+//            logger.error("[$accountName] Failed to record log submission for $paymentId", e)
+//        }
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             //.timeout(Duration.ofMillis(time95Percentile))

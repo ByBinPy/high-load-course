@@ -28,10 +28,12 @@ fun PaymentAggregateState.logProcessing(
     transactionId: UUID? = null,
     reason: String? = null
 ): PaymentProcessedEvent {
+    val startCallInMap = now()
     val submission = transactionId?.let { this.submissions[it] }
+    val endCallInMap = now()
     val submittedAt = submission?.timeStarted ?: 0
     val spentInQueueDuration = submission?.spentInQueue ?: Duration.ofMillis(0)
-    Metrics.timer("bombardier.in.queue.latency").record(spentInQueueDuration)
+    Metrics.timer("bombardier.in.queue.latency").record(Duration.ofMillis(endCallInMap-startCallInMap))
     return PaymentProcessedEvent(
         this.getId(), success, this.orderId, submittedAt, processedAt, this.amount!!, transactionId, reason, spentInQueueDuration
     )
