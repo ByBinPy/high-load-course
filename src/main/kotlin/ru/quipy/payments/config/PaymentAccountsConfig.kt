@@ -55,8 +55,8 @@ class PaymentAccountsConfig {
     fun warehouseIfUnfinishedWork(
         accountProperties: List<PaymentAccountProperties>,
     ): ThreadPoolExecutor {
-        val corePoolSize = 100
-        val maximumPoolSize = 100
+        val corePoolSize = 1000
+        val maximumPoolSize = 1000
         val queueSize = 100_000
         val keepAliveTime = 0L
         logger.info("Thread Pool Properties: core pool size - {}, maximum pool size - {}, queue size - {}, keepAliveTime - {}", corePoolSize, maximumPoolSize, queueSize, keepAliveTime)
