@@ -1,4 +1,4 @@
-### Test 6 run...
+### Test 11 run...
 POST http://localhost:1234/test/run
 Content-Type: application/json
 
@@ -6,34 +6,9 @@ Content-Type: application/json
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
   "ratePerSecond": 100,
-  "testCount": 5000,
-  "processingTimeMillis": 20000
+  "testCount": 20000,
+  "processingTimeMillis": 1500
 }
-
-### Test 7 run...
-POST http://localhost:1234/test/run
-Content-Type: application/json
-
-{
-  "serviceName": "{{serviceName}}",
-  "token": "{{token}}",
-  "ratePerSecond": 100,
-  "testCount": 5000,
-  "processingTimeMillis": 20000
-}
-
-### Test 8 run...
-POST http://localhost:1234/test/run
-Content-Type: application/json
-
-{
-  "serviceName": "{{serviceName}}",
-  "token": "{{token}}",
-  "ratePerSecond": 100,
-  "testCount": 5000,
-  "processingTimeMillis": 20000
-}
-
 
 
 ### Stop running test to save time and resources

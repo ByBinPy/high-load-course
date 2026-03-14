@@ -143,7 +143,13 @@ class PaymentAccountsConfig {
         rateLimiter: SlidingWindowRateLimiter
     ): List<PaymentExternalSystemAdapter> {
         return accountProperties
-            .map { it.copy(enabled = true) }
+            .map {
+                if (it.accountName == "acc-22") {
+                    it.copy(enabled = true, hedgingEnabled = true, hedgeDelayMillis = 400L)
+                } else {
+                    it.copy(enabled = true)
+                }
+            }
             .onEach(::println)
             .map {
                 PaymentExternalSystemAdapterImpl(
