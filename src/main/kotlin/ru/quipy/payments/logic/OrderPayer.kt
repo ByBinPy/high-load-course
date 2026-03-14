@@ -45,7 +45,7 @@ class OrderPayer(
         paymentExecutor.submit {
             startedCounter.increment()
             try {
-                val createdEvent = paymentESService.create {
+                paymentESService.create {
                     it.create(
                         paymentId,
                         orderId,

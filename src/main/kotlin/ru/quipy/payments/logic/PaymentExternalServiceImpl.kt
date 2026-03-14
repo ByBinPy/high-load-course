@@ -45,7 +45,8 @@ class PaymentExternalSystemAdapterImpl(
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val time95Percentile = 100L
+    private val processingTimeMillis = 1000L
+    private val time95Percentile = processingTimeMillis / 3
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
     private val inFlightRequests = AtomicInteger(0)
@@ -65,7 +66,6 @@ class PaymentExternalSystemAdapterImpl(
         ) { it.toDouble() }
     }
 
-    private val processingTimeMillis = 1000L
     private val timer =
         meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val retryCounter =
@@ -97,7 +97,7 @@ class PaymentExternalSystemAdapterImpl(
 //        }
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
-            //.timeout(Duration.ofMillis(time95Percentile))
+            .timeout(Duration.ofMillis(time95Percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
         parallelLimiter.acquire()
@@ -119,8 +119,7 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
-        if (!rateLimiter.tickBlocking(time95Percentile)) {
-            parallelLimiter.release()
+        if (!rateLimiter.tick()) {
             throw TooManyRequestsException(10)
         }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
@@ -221,6 +220,7 @@ class PaymentExternalSystemAdapterImpl(
                 val newRequest = HttpRequest.newBuilder()
                     .uri(request.uri())
                     .POST(HttpRequest.BodyPublishers.noBody())
+                    .timeout(Duration.ofMillis(newRequestTimeout))
                     .build()
                 parallelLimiter.acquire()
                 completeAction(retryCount + 1, newRequest, paymentId, transactionId, deadline)

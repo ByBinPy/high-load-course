@@ -92,7 +92,7 @@ class PaymentAccountsConfig {
         @Value("#{'\${payment.processingTimeMillis}'.split(',')}")
         processingTimeMillis: Int
     ): LeakingBucketRateLimiter {
-        val bucketSize = 5000
+        val bucketSize = 6000
         val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
         logger.info("Burst Rate Limiter Properties: bucket size - {}, rate - {}", bucketSize, rate)
         return LeakingBucketRateLimiter(
