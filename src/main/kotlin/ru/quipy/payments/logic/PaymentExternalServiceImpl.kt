@@ -10,7 +10,6 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
-import ru.quipy.exceptions.TooManyRequestsException
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.EOFException
 import java.io.IOException
@@ -117,7 +116,7 @@ class PaymentExternalSystemAdapterImpl(
             .timeout(Duration.ofMillis(time95Percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
-
+        parallelLimiter.acquire()
         completeAction(0, request, paymentId, transactionId, deadline)
     }
 
@@ -136,11 +135,6 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
-        parallelLimiter.acquire()
-        if (!rateLimiter.tickBlocking(timeout = deadline - now() - time95Percentile)) {
-            parallelLimiter.release()
-            throw TooManyRequestsException(10)
-        }
         startedRequests.increment()
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
@@ -227,6 +221,7 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         requestsRetried.increment()
         retryExecutor.schedule({
+            parallelLimiter.acquire()
             logger.info("Completing retry. All retry count - {}", requestsRetried.count())
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
