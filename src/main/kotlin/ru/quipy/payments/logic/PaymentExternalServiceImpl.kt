@@ -73,7 +73,7 @@ class PaymentExternalSystemAdapterImpl(
         meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
     private val retryCounter =
         meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
-    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(10)
+    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(100)
     private val httpClient = HttpClient
         .newBuilder()
         .executor(Executors.newFixedThreadPool(parallelRequests))
@@ -109,6 +109,7 @@ class PaymentExternalSystemAdapterImpl(
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, "not enough time")
             }
+            return
         }
 
         val request = HttpRequest.newBuilder()
@@ -116,7 +117,6 @@ class PaymentExternalSystemAdapterImpl(
             .timeout(Duration.ofMillis(time95Percentile))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
-        parallelLimiter.acquire()
         completeAction(0, request, paymentId, transactionId, deadline)
     }
 
@@ -133,6 +133,7 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         deadline: Long
     ) {
+        parallelLimiter.acquire()
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
         startedRequests.increment()
@@ -221,7 +222,6 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         requestsRetried.increment()
         retryExecutor.schedule({
-            parallelLimiter.acquire()
             logger.info("Completing retry. All retry count - {}", requestsRetried.count())
             val remainingTime = deadline - now()
             if (remainingTime < requestAverageProcessingTime.toMillis()) {
@@ -229,6 +229,7 @@ class PaymentExternalSystemAdapterImpl(
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, "Not enough time for retry")
                     }
+                    return@schedule
                 } catch (e: Exception) {
                     logger.error("[$accountName] Failed to record retry failure for $paymentId", e)
                 }
