@@ -6,7 +6,7 @@ RUN mvn dependency:go-offline
 COPY src src
 RUN mvn package
 
-FROM eclipse-temurin:17-alpine-3.22
+FROM openjdk:17-jdk-slim-bullseye
 
 COPY --from=build /app/target/*.jar /high-load-course.jar
 
