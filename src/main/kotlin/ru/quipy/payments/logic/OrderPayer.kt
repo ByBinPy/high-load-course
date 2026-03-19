@@ -45,12 +45,18 @@ class OrderPayer(
         paymentExecutor.submit {
             startedCounter.increment()
             try {
-                paymentESService.create {
-                    it.create(
-                        paymentId,
-                        orderId,
-                        amount
-                    )
+                val esFuture = java.util.concurrent.CompletableFuture.runAsync {
+                    try {
+                        paymentESService.create {
+                            it.create(
+                                paymentId,
+                                orderId,
+                                amount
+                            )
+                        }
+                    } catch (e: Exception) {
+                        logger.error("Failed to create payment ES event for $paymentId", e)
+                    }
                 }
                 inExecTimer.record(now()-createdAt, TimeUnit.MILLISECONDS)
                 paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)

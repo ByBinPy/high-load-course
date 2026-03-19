@@ -144,7 +144,7 @@ class PaymentAccountsConfig {
         return accountProperties
             .map {
                 if (it.accountName == "acc-22") {
-                    it.copy(enabled = true, hedgingEnabled = true, hedgeDelayMillis = 400L)
+                    it.copy(enabled = true, hedgingEnabled = true, hedgeDelayMillis = 150L)
                 } else {
                     it.copy(enabled = true)
                 }
@@ -157,7 +157,8 @@ class PaymentAccountsConfig {
                     paymentProviderHostPort,
                     token,
                     meterRegistry,
-                    parallelLimiter(accountProperties)
+                    parallelLimiter(accountProperties),
+                    rateLimiter = smoothOutIncoming(accountProperties)
                 )
             }
     }
