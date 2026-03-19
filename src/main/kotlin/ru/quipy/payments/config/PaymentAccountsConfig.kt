@@ -86,21 +86,21 @@ class PaymentAccountsConfig {
         return Semaphore(parallelRequests)
     }
 
-    @Bean
-    fun burstRateLimiter(
-        accountProperties: List<PaymentAccountProperties>,
-        @Value("#{'\${payment.processingTimeMillis}'.split(',')}")
-        processingTimeMillis: Int
-    ): LeakingBucketRateLimiter {
-        val bucketSize = 6000
-        val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
-        logger.info("Burst Rate Limiter Properties: bucket size - {}, rate - {}", bucketSize, rate)
-        return LeakingBucketRateLimiter(
-            rate = rate,
-            window = rateCheckWindow,
-            bucketSize = bucketSize
-        )
-    }
+//    @Bean
+//    fun burstRateLimiter(
+//        accountProperties: List<PaymentAccountProperties>,
+//        @Value("#{'\${payment.processingTimeMillis}'.split(',')}")
+//        processingTimeMillis: Int
+//    ): LeakingBucketRateLimiter {
+//        val bucketSize = 6000
+//        val rate = accountProperties.minOf { it.rateLimitPerSec }.toLong()
+//        logger.info("Burst Rate Limiter Properties: bucket size - {}, rate - {}", bucketSize, rate)
+//        return LeakingBucketRateLimiter(
+//            rate = rate,
+//            window = rateCheckWindow,
+//            bucketSize = bucketSize
+//        )
+//    }
 
     @Bean
     fun smoothOutIncoming(
@@ -139,8 +139,7 @@ class PaymentAccountsConfig {
     fun accountAdapters(
         paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
         meterRegistry: io.micrometer.core.instrument.MeterRegistry,
-        accountProperties: List<PaymentAccountProperties>,
-        rateLimiter: SlidingWindowRateLimiter
+        accountProperties: List<PaymentAccountProperties>
     ): List<PaymentExternalSystemAdapter> {
         return accountProperties
             .map {
@@ -158,8 +157,7 @@ class PaymentAccountsConfig {
                     paymentProviderHostPort,
                     token,
                     meterRegistry,
-                    parallelLimiter(accountProperties),
-                    rateLimiter
+                    parallelLimiter(accountProperties)
                 )
             }
     }

@@ -28,6 +28,6 @@ class GlobalExceptionHandler(
     }
     @ExceptionHandler(TooManyRequestsException::class)
     fun handleTooManyRequestsRetriable(exception: TooManyRequestsException): ResponseEntity<String> {
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", "1").body("to many requests")
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", "1000").body("to many requests")
     }
 }

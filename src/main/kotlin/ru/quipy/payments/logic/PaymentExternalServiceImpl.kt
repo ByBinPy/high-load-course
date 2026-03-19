@@ -39,8 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentProviderHostPort: String,
     private val token: String,
     meterRegistry: MeterRegistry,
-    private val parallelLimiter: Semaphore,
-    private val rateLimiter: SlidingWindowRateLimiter
+    private val parallelLimiter: Semaphore
 ) : PaymentExternalSystemAdapter {
 
     private val serviceName = properties.serviceName
@@ -139,10 +138,6 @@ class PaymentExternalSystemAdapterImpl(
                             .timeout(Duration.ofMillis(hedgeTimeout))
                             .build()
 
-                        if (!rateLimiter.tick()) {
-                            return@schedule
-                        }
-
                         parallelLimiter.acquire()
                         sendAttempt(0, hedgeRequest, paymentId, transactionId, deadline, completed, allowHedge = false)
                     } catch (e: Exception) {
@@ -172,88 +167,54 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         inFlightRequests.incrementAndGet()
         val timeBeforeCall = now()
-        if (!rateLimiter.tick()) {
-            parallelLimiter.release()
-            inFlightRequests.decrementAndGet()
-            throw TooManyRequestsException(10)
-        }
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
             .whenComplete { response, throwable ->
                 parallelLimiter.release()
                 inFlightRequests.decrementAndGet()
-                if (retryCount > 0) {
-                    retryRequests.decrementAndGet()
-                }
+                if (retryCount > 0) retryRequests.decrementAndGet()
                 timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
 
-                if (completed.get()) {
-                    return@whenComplete
-                }
+                if (completed.get()) return@whenComplete
 
                 if (throwable != null) {
                     val e = throwable.cause
-                    var isRetriable = true
-                    when (throwable.cause) {
-                        is SocketTimeoutException -> {
-                        }
-
-                        is InterruptedIOException -> {
-                        }
-
-                        is EOFException -> {
-                        }
-
-                        is IOException -> {
-                        }
-
-                        else -> {
-                            logger.warn("[$accountName] io error: $paymentId", e)
-                            isRetriable = false
-                        }
+                    val isRetriable = when (throwable.cause) {
+                        is SocketTimeoutException, is InterruptedIOException, is EOFException, is IOException -> true
+                        else -> false
                     }
 
-                    if (retryCount + 1 >= 3) {
+                    if (retryCount + 1 >= 2) { // после 2 попыток бросаем исключение
                         if (completed.compareAndSet(false, true)) {
                             try {
                                 paymentESService.update(paymentId) {
-                                    it.logProcessing(false, now(), transactionId, "Max attempts reached")
+                                    it.logProcessing(false, now(), transactionId, "Too many attempts")
                                 }
                             } catch (ex: Exception) {
                                 logger.error("[$accountName] Failed to record max attempts for $paymentId", ex)
                             }
+                            throw TooManyRequestsException(1000L)
                         }
-                    } else {
+                        return@whenComplete
+                    }
+
+                    if (isRetriable) {
+                        retryRequests.incrementAndGet()
+                        retryCounter.increment()
                         val backoff = ((2.0.pow(retryCount.toDouble()) * 25).toLong() + Random.nextLong(10))
                         val capped = backoff.coerceAtMost(deadline - now() - 5)
-                        if (capped <= 0) {
+                        if (capped > 0) {
+                            scheduleRetry(retryCount, request, paymentId, transactionId, deadline, capped, completed)
+                        } else {
                             if (completed.compareAndSet(false, true)) {
-                                try {
-                                    paymentESService.update(paymentId) {
-                                        it.logProcessing(false, now(), transactionId, "Deadline expired")
-                                    }
-                                } catch (ex: Exception) {
-                                    logger.error("[$accountName] Failed to record deadline expiry for $paymentId", ex)
+                                paymentESService.update(paymentId) {
+                                    it.logProcessing(false, now(), transactionId, "Deadline expired")
                                 }
                             }
-                        } else {
-                            if (isRetriable) {
-                                if (!completed.get()) {
-                                    retryRequests.incrementAndGet()
-                                    retryCounter.increment()
-                                    scheduleRetry(
-                                        retryCount, request, paymentId, transactionId, deadline, capped, completed
-                                    )
-                                }
-                            } else {
-                                if (completed.compareAndSet(false, true)) {
-                                    try {
-                                        paymentESService.update(paymentId) {
-                                            it.logProcessing(false, now(), transactionId, "Non-retriable exception")
-                                        }
-                                    } catch (ex: Exception) {
-                                        logger.error("[$accountName] Failed to record non-retriable for $paymentId", ex)
-                                    }
-                                }
+                        }
+                    } else {
+                        if (completed.compareAndSet(false, true)) {
+                            paymentESService.update(paymentId) {
+                                it.logProcessing(false, now(), transactionId, "Non-retriable exception")
                             }
                         }
                     }
@@ -266,12 +227,8 @@ class PaymentExternalSystemAdapterImpl(
                             ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
                         }
                         if (completed.compareAndSet(false, true)) {
-                            try {
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(parsed.result, now(), transactionId, parsed.message)
-                                }
-                            } catch (e: Exception) {
-                                logger.error("[$accountName] Error updating ES for payment $paymentId", e)
+                            paymentESService.update(paymentId) {
+                                it.logProcessing(parsed.result, now(), transactionId, parsed.message)
                             }
                         }
                     } catch (e: Exception) {
@@ -310,18 +267,7 @@ class PaymentExternalSystemAdapterImpl(
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .timeout(Duration.ofMillis(newRequestTimeout))
                     .build()
-                if (!rateLimiter.tick()) {
-                    if (deadline - now() <= 0 && completed.compareAndSet(false, true)) {
-                        try {
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(false, now(), transactionId, "Rate limit prevented retry and deadline expired")
-                            }
-                        } catch (e: Exception) {
-                            logger.error("[$accountName] Failed to record rate-limited retry for $paymentId", e)
-                        }
-                    }
-                    return@schedule
-                }
+
                 parallelLimiter.acquire()
                 sendAttempt(retryCount + 1, newRequest, paymentId, transactionId, deadline, completed, allowHedge = false)
             }
