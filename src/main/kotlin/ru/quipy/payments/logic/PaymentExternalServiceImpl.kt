@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Tag
 import kotlinx.coroutines.CoroutineScope
@@ -41,7 +42,8 @@ class PaymentExternalSystemAdapterImpl(
     private val token: String,
     meterRegistry: MeterRegistry,
     private val parallelLimiter: Semaphore,
-    private val rateLimiter: SlidingWindowRateLimiter
+    private val rateLimiter: SlidingWindowRateLimiter,
+    private val circuitBreaker: CircuitBreaker,
 ) : PaymentExternalSystemAdapter {
 
     private val serviceName = properties.serviceName
@@ -80,24 +82,6 @@ class PaymentExternalSystemAdapterImpl(
             listOf(Tag.of("accountName", properties.accountName)),
             retryRequests
         ) { it.toDouble() }
-
-        try {
-            val warmupUri = URI("http://$paymentProviderHostPort/external/accounts?serviceName=$serviceName&token=$token")
-            val warmupRequest = HttpRequest.newBuilder()
-                .uri(warmupUri)
-                .timeout(Duration.ofSeconds(5))
-                .GET()
-                .build()
-            val futures = (1..10).map {
-                httpClient.sendAsync(warmupRequest, HttpResponse.BodyHandlers.ofString())
-            }
-            futures.forEach { future ->
-                try { future.join() } catch (_: Exception) {}
-            }
-            logger.info("[$accountName] HTTP client warmup complete")
-        } catch (e: Exception) {
-            logger.warn("[$accountName] HTTP warmup failed (non-fatal)", e)
-        }
     }
 
 
@@ -131,6 +115,17 @@ class PaymentExternalSystemAdapterImpl(
             throw TooManyRequestsException(deadline)
         }
 
+        if (!circuitBreaker.tryAcquirePermission()) {
+            try {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, "Circuit breaker rejected (no permission)")
+                }
+            } catch (e: Exception) {
+                logger.error("accountName: $accountName. Failed to record CB reject for $paymentId", e)
+            }
+            return
+        }
+
         parallelLimiter.acquire()
         sendAttempt(0, request, paymentId, transactionId, deadline, completed, allowHedge = true)
 
@@ -155,7 +150,13 @@ class PaymentExternalSystemAdapterImpl(
                                 return@schedule
                             }
 
+                            if (!circuitBreaker.tryAcquirePermission()) {
+                                logger.debug("accountName: $accountName. Hedge skipped: CB no permission for $paymentId")
+                                return@schedule
+                            }
+
                             parallelLimiter.acquire()
+
                             sendAttempt(
                                 0,
                                 hedgeRequest,
@@ -200,7 +201,34 @@ class PaymentExternalSystemAdapterImpl(
                 if (retryCount > 0) {
                     retryRequests.decrementAndGet()
                 }
-                timer.record(now() - timeBeforeCall, TimeUnit.MILLISECONDS)
+
+                val callDuration = now() - timeBeforeCall
+                timer.record(callDuration, TimeUnit.MILLISECONDS)
+
+                if (throwable != null) {
+                    circuitBreaker.onError(callDuration, TimeUnit.MILLISECONDS, throwable)
+                } else {
+                    try {
+                        val rawBody = response.body()
+                        val parsed = try {
+                            mapper.readValue(rawBody, ExternalSysResponse::class.java)
+                        } catch (ex: Exception) {
+                            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, ex.message)
+                        }
+
+                        if (parsed.result) {
+                            circuitBreaker.onSuccess(callDuration, TimeUnit.MILLISECONDS)
+                        } else {
+                            circuitBreaker.onError(
+                                callDuration,
+                                TimeUnit.MILLISECONDS,
+                                RuntimeException(parsed.message ?: "Payment rejected"),
+                            )
+                        }
+                    } catch (e: Exception) {
+                        circuitBreaker.onError(callDuration, TimeUnit.MILLISECONDS, e)
+                    }
+                }
 
                 if (completed.get()) {
                     return@whenComplete
@@ -338,6 +366,12 @@ class PaymentExternalSystemAdapterImpl(
 //                    }
                     return@schedule
                 }
+
+                if (!circuitBreaker.tryAcquirePermission()) {
+                    logger.debug("accountName: $accountName. Retry skipped: CB no permission for $paymentId")
+                    return@schedule
+                }
+
                 parallelLimiter.acquire()
                 sendAttempt(
                     retryCount + 1,

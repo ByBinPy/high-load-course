@@ -152,13 +152,14 @@ class PaymentAccountsConfig {
             .onEach(::println)
             .map {
                 PaymentExternalSystemAdapterImpl(
-                    it,
-                    paymentService,
-                    paymentProviderHostPort,
-                    token,
-                    meterRegistry,
-                    parallelLimiter(accountProperties),
-                    rateLimiter = smoothOutIncoming(accountProperties)
+                    properties = it,
+                    paymentESService = paymentService,
+                    paymentProviderHostPort = paymentProviderHostPort,
+                    token = token,
+                    meterRegistry = meterRegistry,
+                    parallelLimiter = parallelLimiter(accountProperties),
+                    rateLimiter = smoothOutIncoming(accountProperties),
+                    circuitBreaker = PaymentCircuitBreakerFactory.forAccount(accountProperties.first())
                 )
             }
     }
