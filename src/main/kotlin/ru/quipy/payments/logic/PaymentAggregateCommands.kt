@@ -1,5 +1,6 @@
 package ru.quipy.payments.logic
 
+import io.micrometer.core.instrument.Metrics
 import ru.quipy.payments.api.PaymentCreatedEvent
 import ru.quipy.payments.api.PaymentProcessedEvent
 import ru.quipy.payments.api.PaymentSubmittedEvent
@@ -27,9 +28,12 @@ fun PaymentAggregateState.logProcessing(
     transactionId: UUID? = null,
     reason: String? = null
 ): PaymentProcessedEvent {
-    val submittedAt = this.submissions[transactionId ?: UUID.randomUUID()]?.timeStarted ?: 0
-    val spentInQueueDuration = this.submissions[transactionId ?: UUID.randomUUID()]?.spentInQueue ?: Duration.ofMillis(0)
-
+    val startCallInMap = now()
+    val submission = transactionId?.let { this.submissions[it] }
+    val endCallInMap = now()
+    val submittedAt = submission?.timeStarted ?: 0
+    val spentInQueueDuration = submission?.spentInQueue ?: Duration.ofMillis(0)
+    Metrics.timer("bombardier.in.queue.latency").record(Duration.ofMillis(endCallInMap-startCallInMap))
     return PaymentProcessedEvent(
         this.getId(), success, this.orderId, submittedAt, processedAt, this.amount!!, transactionId, reason, spentInQueueDuration
     )
