@@ -11,6 +11,7 @@ import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -42,28 +43,31 @@ class OrderPayer(
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         plannedCounter.increment()
-        paymentExecutor.submit {
-            startedCounter.increment()
-            try {
-                val esFuture = java.util.concurrent.CompletableFuture.runAsync {
-                    try {
-                        paymentESService.create {
-                            it.create(
-                                paymentId,
-                                orderId,
-                                amount
-                            )
-                        }
-                    } catch (e: Exception) {
-                        logger.warn("Failed to create payment ES event for $paymentId", e)
+
+        CompletableFuture
+            .runAsync(
+                {
+                    startedCounter.increment()
+                    paymentESService.create {
+                        it.create(paymentId, orderId, amount)
                     }
+                },
+                paymentExecutor,
+            )
+            .thenRunAsync(
+                {
+                    inExecTimer.record(now() - createdAt, TimeUnit.MILLISECONDS)
+                    paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+                },
+                paymentExecutor,
+            )
+            .whenComplete { _, ex ->
+                if (ex != null) {
+                    logger.warn("process stopped before submit for payment: $paymentId", ex)
                 }
-                inExecTimer.record(now()-createdAt, TimeUnit.MILLISECONDS)
-                paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-            } finally {
                 completedCounter.increment()
             }
-        }
+
         return createdAt
     }
 }
