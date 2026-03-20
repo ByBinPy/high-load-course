@@ -3,6 +3,7 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Metrics
 import io.micrometer.core.instrument.Tag
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +54,7 @@ class PaymentExternalSystemAdapterImpl(
     private val inFlightRequests = AtomicInteger(0)
     private val retryRequests = AtomicInteger(0)
     private val scope = CoroutineScope(Dispatchers.Default)
+    private val callTimeout = 500L
 
     private val hedgeEnabled = properties.hedgingEnabled
     private val hedgeDelayMillis = properties.hedgeDelayMillis ?: (requestAverageProcessingTime.toMillis() / 2).coerceAtLeast(50L)
@@ -85,7 +87,7 @@ class PaymentExternalSystemAdapterImpl(
             val warmupUri = URI("http://$paymentProviderHostPort/external/accounts?serviceName=$serviceName&token=$token")
             val warmupRequest = HttpRequest.newBuilder()
                 .uri(warmupUri)
-                .timeout(Duration.ofSeconds(5))
+                .timeout(Duration.ofMillis(callTimeout))
                 .GET()
                 .build()
             val futures = (1..10).map {
@@ -105,7 +107,7 @@ class PaymentExternalSystemAdapterImpl(
         val transactionId = UUID.randomUUID()
 
         val remainingTimeAtStart = deadline - now()
-        if (remainingTimeAtStart <= 50L) {
+        if (remainingTimeAtStart <= 10L) {
             try {
                 paymentESService.update(paymentId) {
                     it.logProcessing(false, now(), transactionId, "Deadline already expired")
@@ -116,13 +118,11 @@ class PaymentExternalSystemAdapterImpl(
             return
         }
 
-        val initialTimeout = remainingTimeAtStart
-
         val baseUri =
             "http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"
         val request = HttpRequest.newBuilder()
             .uri(URI(baseUri))
-            .timeout(Duration.ofMillis(initialTimeout))
+            .timeout(Duration.ofMillis(remainingTimeAtStart))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
         val completed = AtomicBoolean(false)
@@ -283,9 +283,13 @@ class PaymentExternalSystemAdapterImpl(
                         }
                         if (completed.compareAndSet(false, true)) {
                             try {
+                                val startCall = now()
                                 paymentESService.update(paymentId) {
                                     it.logProcessing(parsed.result, now(), transactionId, parsed.message)
                                 }
+                                val endCall = now()
+                                Metrics.timer("bombardier.in.queue.latency").record(Duration.ofMillis(endCall-startCall))
+
                             } catch (e: Exception) {
                                 logger.error("[$accountName] Error updating ES for payment $paymentId", e)
                             }
