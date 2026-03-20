@@ -10,6 +10,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
+import ru.quipy.exceptions.TooManyRequestsException
 
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.EOFException
@@ -56,6 +57,18 @@ class PaymentExternalSystemAdapterImpl(
     private val hedgeEnabled = properties.hedgingEnabled
     private val hedgeDelayMillis = properties.hedgeDelayMillis ?: (requestAverageProcessingTime.toMillis() / 2).coerceAtLeast(50L)
 
+    private val timer =
+        meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
+    private val retryCounter =
+        meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
+    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(50)
+    private val httpClient = HttpClient
+        .newBuilder()
+        .executor(Executors.newFixedThreadPool(500))
+        .version(HttpClient.Version.HTTP_2)
+        .connectTimeout(Duration.ofMillis(connectTimeoutMillis))
+        .build()
+
     init {
         meterRegistry.gauge(
             "payment.account.inflight.requests",
@@ -67,19 +80,26 @@ class PaymentExternalSystemAdapterImpl(
             listOf(Tag.of("accountName", properties.accountName)),
             retryRequests
         ) { it.toDouble() }
+
+        try {
+            val warmupUri = URI("http://$paymentProviderHostPort/external/accounts?serviceName=$serviceName&token=$token")
+            val warmupRequest = HttpRequest.newBuilder()
+                .uri(warmupUri)
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build()
+            val futures = (1..10).map {
+                httpClient.sendAsync(warmupRequest, HttpResponse.BodyHandlers.ofString())
+            }
+            futures.forEach { future ->
+                try { future.join() } catch (_: Exception) {}
+            }
+            logger.info("[$accountName] HTTP client warmup complete")
+        } catch (e: Exception) {
+            logger.warn("[$accountName] HTTP warmup failed (non-fatal)", e)
+        }
     }
 
-    private val timer =
-        meterRegistry.timer("payment.external.system.request.latency", "accountName", properties.accountName)
-    private val retryCounter =
-        meterRegistry.counter("payment.external.retry.count", "accountName", properties.accountName)
-    private val retryExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(30)
-    private val httpClient = HttpClient
-        .newBuilder()
-        .executor(Executors.newFixedThreadPool(parallelRequests))
-        .version(HttpClient.Version.HTTP_2)
-        .connectTimeout(Duration.ofMillis(connectTimeoutMillis))
-        .build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         val transactionId = UUID.randomUUID()
@@ -108,21 +128,14 @@ class PaymentExternalSystemAdapterImpl(
         val completed = AtomicBoolean(false)
 
         if (!rateLimiter.tickBlocking(50)) {
-            try {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, "Rate limit exceeded at start")
-                }
-            } catch (e: Exception) {
-                logger.error("[$accountName] Failed to record rate limit for $paymentId", e)
-            }
-            return
+            throw TooManyRequestsException(deadline)
         }
 
         parallelLimiter.acquire()
         sendAttempt(0, request, paymentId, transactionId, deadline, completed, allowHedge = true)
 
         if (hedgeEnabled) {
-            val hedgeDelays = listOf(hedgeDelayMillis, hedgeDelayMillis * 2)
+            val hedgeDelays = listOf(100L, 250L, 450L, 700L, 950L)
             for (delay in hedgeDelays) {
                 try {
                     retryExecutor.schedule({
@@ -313,16 +326,16 @@ class PaymentExternalSystemAdapterImpl(
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .timeout(Duration.ofMillis(newRequestTimeout))
                     .build()
-                if (!rateLimiter.tick()) {
-                    if (completed.compareAndSet(false, true)) {
-                        try {
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(false, now(), transactionId, "Rate limit prevented retry")
-                            }
-                        } catch (e: Exception) {
-                            logger.error("[$accountName] Failed to record rate-limited retry for $paymentId", e)
-                        }
-                    }
+                if (!rateLimiter.tickBlocking(15)) {
+//                    if (completed.compareAndSet(false, true)) {
+//                        try {
+//                            paymentESService.update(paymentId) {
+//                                it.logProcessing(false, now(), transactionId, "Rate limit prevented retry")
+//                            }
+//                        } catch (e: Exception) {
+//                            logger.error("[$accountName] Failed to record rate-limited retry for $paymentId", e)
+//                        }
+//                    }
                     return@schedule
                 }
                 parallelLimiter.acquire()

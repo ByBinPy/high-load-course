@@ -55,7 +55,7 @@ class OrderPayer(
                             )
                         }
                     } catch (e: Exception) {
-                        logger.error("Failed to create payment ES event for $paymentId", e)
+                        logger.warn("Failed to create payment ES event for $paymentId", e)
                     }
                 }
                 inExecTimer.record(now()-createdAt, TimeUnit.MILLISECONDS)

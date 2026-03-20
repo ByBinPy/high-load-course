@@ -6,7 +6,7 @@ Content-Type: application/json
 {
   "serviceName": "{{serviceName}}",
   "token": "{{token}}",
-  "branch": "main",
+  "branch": "feature/kuro-11-lab",
   "accounts": "acc-22",
   "ratePerSecond": 100,
   "testCount": 20000,
@@ -16,4 +16,4 @@ Content-Type: application/json
 
 ### Stop running test to save credits
 # @timeout 120
-POST http://77.234.215.138:31234/test/stop/"{{serviceName}}"
+POST http://77.234.215.138:31234/test/stop/{{serviceName}}
